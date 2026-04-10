@@ -31,6 +31,7 @@ def load_lookup(group):
 # ========= 初始化 =========
 if "page" not in st.session_state:
     st.session_state.page = "intro"
+    st.session_state.phase = "prior"
     st.session_state.idx = 0
     st.session_state.order = []
     st.session_state.group = "FH"
@@ -79,70 +80,70 @@ elif st.session_state.page == "trial":
 
     item_idx = st.session_state.order[idx]
     item = riddles[item_idx]
-
     item_id = item["item_id"]
 
-    # ===== 模型真实信号 =====
     prob = lookup[item_id]["final_prob"]
-
-    # ===== 人类可理解展示 =====
     score = map_prob_to_score(prob)
 
-    # ========= UI =========
     st.markdown(f"### 第 {idx+1} 题")
-
     st.markdown(item["riddle_text"])
     st.markdown(f"🔹 锚点词：**{item['anchor_word']}**")
 
-    # ✅ wording 修正（关键）
-    prior = st.slider(
-        "你认为该词作为答案的可能性（直觉判断）",
-        0, 100, 50,
-        key=f"prior_{idx}"
-    )
+    # ========= Phase 1 =========
+    if st.session_state.phase == "prior":
 
-    st.markdown(f"🔸 提示词：**{item['cue_word']}**")
+        prior = st.slider(
+            "你认为该词作为答案的可能性（直觉判断）",
+            0, 100, 50,
+            key=f"prior_{idx}"
+        )
 
-    # ✅ 使用 mapping 后的 score
-    st.markdown(f"👉 系统提示：语义关联强度 **{score}/100**")
+        if st.button("下一步", key=f"next_{idx}"):
 
-    updated = st.slider(
-        "在看到提示后，你现在的判断",
-        0, 100, 50,
-        key=f"updated_{idx}"
-    )
+            st.session_state.temp_prior = prior
+            st.session_state.phase = "update"
+            st.rerun()
 
-    confidence = st.slider(
-        "你对当前判断的信心",
-        0, 100, 50,
-        key=f"conf_{idx}"
-    )
+    # ========= Phase 2 =========
+    elif st.session_state.phase == "update":
 
-    # ========= 提交 =========
-    if st.button("提交", key=f"submit_{idx}"):
+        st.markdown(f"🔸 提示词：**{item['cue_word']}**")
+        st.markdown(f"👉 系统提示：语义关联强度 **{score}/100**")
 
-        st.session_state.responses.append({
-            "participant": st.session_state.pid,
-            "group": st.session_state.group,
-            "item_id": item_id,
+        updated = st.slider(
+            "在看到提示后，你现在的判断",
+            0, 100, 50,
+            key=f"updated_{idx}"
+        )
 
-            # 行为数据
-            "prior": prior / 100,
-            "updated": updated / 100,
-            "confidence": confidence / 100,
+        confidence = st.slider(
+            "你对当前判断的信心",
+            0, 100, 50,
+            key=f"conf_{idx}"
+        )
 
-            # 核心模型输入
-            "prob": prob,
-            "log_prob": -math.log10(prob + 1e-12),
+        if st.button("提交", key=f"submit_{idx}"):
 
-            # sanity check用（可选）
-            "display_score": score,
+            st.session_state.responses.append({
+                "participant": st.session_state.pid,
+                "group": st.session_state.group,
+                "item_id": item_id,
 
-            "timestamp": datetime.now().isoformat()
-        })
+                "prior": st.session_state.temp_prior / 100,
+                "updated": updated / 100,
+                "confidence": confidence / 100,
 
-        st.session_state.idx += 1
-        st.rerun()
+                "prob": prob,
+                "log_prob": -math.log10(prob + 1e-12),
+                "display_score": score,
+
+                "timestamp": datetime.now().isoformat()
+            })
+
+            st.session_state.idx += 1
+            st.session_state.phase = "prior"
+            st.rerun()
+
 
 
 # ========= Done =========
