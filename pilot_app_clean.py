@@ -111,10 +111,10 @@ elif st.session_state.page == "trial":
         st.markdown(f"👉 系统提示：这个词和谜底的关联强度分数为 **{score}/100**")
 
         updated = st.slider(
-            "在看到提示后，你现在认为**{item['anchor_word']}**是谜底的可能性",
-            0, 100, 50,
-            key=f"updated_{idx}"
-        )
+    f"在看到提示后，你现在认为 **{item['anchor_word']}** 是谜底的可能性",
+    0, 100, 50,
+    key=f"updated_{idx}"
+)
 
         confidence = st.slider(
             "你对当前判断的信心",
