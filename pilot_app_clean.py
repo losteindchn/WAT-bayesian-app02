@@ -4,6 +4,8 @@ import random
 from datetime import datetime
 import pandas as pd
 import math
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # ========= 页面配置 =========
 st.set_page_config(page_title="Riddle Experiment", layout="centered")
@@ -27,6 +29,20 @@ def load_lookup(group):
     with open(f"lookup_{group}.json", "r", encoding="utf-8") as f:
         return json.load(f)
 
+def init_gsheet():
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(
+        st.secrets["gcp_service_account"],
+        [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+    )
+    client = gspread.authorize(creds)
+
+    return client.open_by_url(
+        st.secrets["gsheet_url"]
+    ).sheet1
+
 
 # ========= 初始化 =========
 if "page" not in st.session_state:
@@ -36,6 +52,9 @@ if "page" not in st.session_state:
     st.session_state.order = []
     st.session_state.group = "FH"
     st.session_state.responses = []
+
+if "sheet" not in st.session_state:
+    st.session_state.sheet = init_gsheet()
 
 
 # ========= Intro =========
@@ -126,21 +145,34 @@ elif st.session_state.page == "trial":
 
         if st.button("提交", key=f"submit_{idx}"):
 
-            st.session_state.responses.append({
+            record = {
                 "participant": st.session_state.pid,
                 "group": st.session_state.group,
                 "item_id": item_id,
-
                 "prior": st.session_state.temp_prior / 100,
                 "updated": updated / 100,
                 "confidence": confidence / 100,
-
                 "prob": prob,
                 "log_prob": -math.log10(prob + 1e-12),
                 "display_score": score,
-
                 "timestamp": datetime.now().isoformat()
-            })
+            }
+
+            # 本地缓存（保留）
+            st.session_state.responses.append(record)
+
+            # ✅ 写入 Google Sheet
+            st.session_state.sheet.append_row([
+                record["participant"],
+                record["group"],
+                record["item_id"],
+                record["prior"],
+                record["updated"],
+                record["confidence"],
+                record["prob"],
+                record["display_score"],
+                record["timestamp"]
+            ])
 
             st.session_state.idx += 1
             st.session_state.phase = "prior"
