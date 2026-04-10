@@ -41,7 +41,7 @@ if "page" not in st.session_state:
 # ========= Intro =========
 if st.session_state.page == "intro":
 
-    st.title("🧠 语义判断实验")
+    st.title("🧠 海龟汤")
 
     pid = st.text_input("请输入参与者ID")
 
@@ -87,13 +87,13 @@ elif st.session_state.page == "trial":
 
     st.markdown(f"### 第 {idx+1} 题")
     st.markdown(item["riddle_text"])
-    st.markdown(f"🔹 锚点词：**{item['anchor_word']}**")
+    st.markdown(f"🔹 注意这个词：**{item['anchor_word']}**")
 
     # ========= Phase 1 =========
     if st.session_state.phase == "prior":
 
         prior = st.slider(
-            "你认为该词作为答案的可能性（直觉判断）",
+            "你认为这个词作为答案的可能性（直觉判断）",
             0, 100, 50,
             key=f"prior_{idx}"
         )
@@ -107,8 +107,8 @@ elif st.session_state.page == "trial":
     # ========= Phase 2 =========
     elif st.session_state.phase == "update":
 
-        st.markdown(f"🔸 提示词：**{item['cue_word']}**")
-        st.markdown(f"👉 系统提示：语义关联强度 **{score}/100**")
+        st.markdown(f"🔸 提示：注意这个词 **{item['cue_word']}**")
+        st.markdown(f"👉 系统提示：这个词和谜底的关联强度分数为 **{score}/100**")
 
         updated = st.slider(
             "在看到提示后，你现在的判断",
