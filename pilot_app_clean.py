@@ -93,7 +93,7 @@ elif st.session_state.page == "trial":
     if st.session_state.phase == "prior":
 
         prior = st.slider(
-            "你认为这个词作为谜底的可能性（直觉判断）",
+            "你认为这个词是谜底或与谜底直接相关的可能性（凭直觉）",
             0, 100, 50,
             key=f"prior_{idx}"
         )
@@ -111,7 +111,7 @@ elif st.session_state.page == "trial":
         st.markdown(f"👉 系统提示：这个词和谜底的关联强度分数为 **{score}/100**")
 
         updated = st.slider(
-    f"在看到提示后，你现在认为 **{item['anchor_word']}** 是谜底的可能性",
+    f"在看到提示后，你现在认为 **{item['anchor_word']}** 是谜底或与谜底直接相关的可能性",
     0, 100, 50,
     key=f"updated_{idx}"
 )
