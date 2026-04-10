@@ -166,23 +166,23 @@ elif st.session_state.page == "trial":
             }
 
             # 本地缓存（保留）
-st.session_state.responses.append(record)
+            st.session_state.responses.append(record)
 
-# ✅ 实时写入（安全版，不影响实验流程）
-safe_append_row(
-    st.session_state.sheet,
-    [
-        record["participant"],
-        record["group"],
-        record["item_id"],
-        record["prior"],
-        record["updated"],
-        record["confidence"],
-        record["prob"],
-        record["display_score"],
-        record["timestamp"]
-    ]
-)
+            # ✅ 实时写入（安全版，不影响实验流程）
+            safe_append_row(
+                st.session_state.sheet,
+                [
+                    record["participant"],
+                    record["group"],
+                    record["item_id"],
+                    record["prior"],
+                    record["updated"],
+                    record["confidence"],
+                    record["prob"],
+                    record["display_score"],
+                    record["timestamp"]
+                ]
+            )
 
             st.session_state.idx += 1
             st.session_state.phase = "prior"
