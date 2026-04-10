@@ -110,7 +110,7 @@ elif st.session_state.page == "trial":
     elif st.session_state.phase == "update":
 
         st.markdown(f"🔸 提示：注意这个词 **{item['cue_word']}**")
-        st.markdown(f"👉 系统提示：这个词和谜底的关联强度分数为 **{score}/100**")
+        st.markdown(f"👉 系统提示：**{item['cue_word']}** 和谜底的关联强度分数为 **{score}/100**")
 
         updated = st.slider(
     f"在看到提示后，你现在认为 **{item['anchor_word']}** 是谜底或与谜底直接相关的可能性",
