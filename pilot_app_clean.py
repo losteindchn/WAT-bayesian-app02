@@ -92,9 +92,10 @@ elif st.session_state.page == "trial":
     # ========= Phase 1 =========
     if st.session_state.phase == "prior":
 
+        st.markdown(f"🔹 注意这个词： **{item['anchor_word']}**")
+
         prior = st.slider(
-            f"🔹 注意这个词：**{item['anchor_word']}**",
-            "你认为这个词是谜底或与谜底直接相关的可能性（凭直觉）",
+            "你认为该词作为答案的可能性（直觉判断）",
             0, 100, 50,
             key=f"prior_{idx}"
         )
