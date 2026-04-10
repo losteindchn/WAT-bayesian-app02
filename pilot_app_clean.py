@@ -43,6 +43,13 @@ def init_gsheet():
         st.secrets["gsheet_url"]
     ).sheet1
 
+def safe_append_row(sheet, row):
+    try:
+        sheet.append_row(row)
+    except Exception as e:
+        # 不打断实验
+        print("GSHEET ERROR:", e)
+
 
 # ========= 初始化 =========
 if "page" not in st.session_state:
@@ -159,20 +166,23 @@ elif st.session_state.page == "trial":
             }
 
             # 本地缓存（保留）
-            st.session_state.responses.append(record)
+st.session_state.responses.append(record)
 
-            # ✅ 写入 Google Sheet
-            st.session_state.sheet.append_row([
-                record["participant"],
-                record["group"],
-                record["item_id"],
-                record["prior"],
-                record["updated"],
-                record["confidence"],
-                record["prob"],
-                record["display_score"],
-                record["timestamp"]
-            ])
+# ✅ 实时写入（安全版，不影响实验流程）
+safe_append_row(
+    st.session_state.sheet,
+    [
+        record["participant"],
+        record["group"],
+        record["item_id"],
+        record["prior"],
+        record["updated"],
+        record["confidence"],
+        record["prob"],
+        record["display_score"],
+        record["timestamp"]
+    ]
+)
 
             st.session_state.idx += 1
             st.session_state.phase = "prior"
