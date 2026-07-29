@@ -2,5 +2,6 @@ streamlit
 pandas
 numpy
 openpyxl
+tqdm
 gspread
-oauth2client
+google-auth
