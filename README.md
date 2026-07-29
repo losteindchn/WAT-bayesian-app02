@@ -145,16 +145,7 @@ completion_code
 completion_code_hash
 ```
 
-## Public Repo Warning
-
-If the deployed Streamlit repo is public, materials and lookup files can expose
-answers or high-scoring query words. For formal data collection, prefer a
-private deployment or a deployment method where data files are not visible in a
-public GitHub repository.
-
-If a public Streamlit deployment is unavoidable, use the survey platform to
-control access, pass unique participant IDs, verify completion codes, and screen
-for repeated or suspicious submissions.
+## 
 
 ## Local Test
 
