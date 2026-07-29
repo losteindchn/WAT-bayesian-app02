@@ -438,7 +438,7 @@ if st.session_state.page == "intro":
 elif st.session_state.page == "training":
     st.title("练习说明")
     st.write("每道题会给出一个简短谜面。你不会看到真正答案。")
-    st.write("第一部分中，你会看到一个候选词，并先判断它是否可能解释谜面；随后看到一个提示词及其与真实答案的关联分数，再更新判断。")
+    st.write("第一部分中，你会看到一个初始线索词，并先判断它与谜底或关键机制相关的可能性；随后看到一个提示词及其与真实答案的关联分数，再更新判断。")
     st.write("第二部分中，你可以主动输入想查询的词，系统会返回该词与真实答案的关联分数。")
     if st.button("进入第一部分"):
         st.session_state.page = "stage1"
@@ -459,10 +459,10 @@ elif st.session_state.page == "stage1":
     show_progress("第一部分", idx, len(st.session_state.order_stage1))
     st.subheader(item.get("title") or f"题目 {idx + 1}")
     st.write(item["riddle_text"])
-    st.markdown(f"候选词：**{fb['anchor_word']}**")
+    st.markdown(f"初始线索词：**{fb['anchor_word']}**")
 
     if st.session_state.stage1_phase == "prior":
-        prior = st.slider("你认为这个候选词能解释谜面的可能性", 0, 100, 50, key=f"prior_{item_id}")
+        prior = st.slider("你认为这个线索词与谜底或关键机制相关的可能性", 0, 100, 50, key=f"prior_{item_id}")
         if st.button("查看提示", key=f"show_{item_id}"):
             st.session_state.temp_prior = prior
             st.session_state.stage1_phase = "update"
