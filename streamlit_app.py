@@ -32,7 +32,31 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.4-training-timed-stage2-clean"
+APP_VERSION = "human-two-stage-v2.5-stage1-20"
+
+
+DEFAULT_STAGE1_ITEM_IDS_20 = [
+    "spx_0034",
+    "spx_0771",
+    "spx_0150",
+    "spx_0384",
+    "spx_0901",
+    "spx_0026",
+    "spx_0628",
+    "spx_0823",
+    "spx_0531",
+    "spx_0797",
+    "spx_0819",
+    "spx_0209",
+    "spx_0240",
+    "spx_0013",
+    "spx_0049",
+    "spx_0788",
+    "spx_0151",
+    "spx_0283",
+    "spx_0561",
+    "spx_0195",
+]
 
 
 st.set_page_config(page_title="文字谜题联想实验", layout="centered")
@@ -107,6 +131,18 @@ def bool_secret(name: str, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def list_secret(name: str, default: List[str]) -> List[str]:
+    value = get_secret(name, default)
+    if value in (None, ""):
+        return list(default)
+    if isinstance(value, str):
+        return [part.strip() for part in value.replace("\n", ",").split(",") if part.strip()]
+    try:
+        return [str(part).strip() for part in value if str(part).strip()]
+    except TypeError:
+        return list(default)
+
+
 def query_param(*names: str, default: str = "") -> str:
     try:
         qp = st.query_params
@@ -171,6 +207,10 @@ def stage1_lookup_prefix() -> str:
 
 def full_lookup_prefix() -> str:
     return str(get_secret("full_lookup_prefix", "lookup_full"))
+
+
+def stage1_item_ids() -> List[str]:
+    return list_secret("stage1_item_ids", DEFAULT_STAGE1_ITEM_IDS_20)
 
 
 @st.cache_data
@@ -427,22 +467,24 @@ if st.session_state.page == "intro":
     consent = st.checkbox("我已了解实验说明，并自愿参加。")
     st.caption(f"招募来源：{platform_source}；实验条件：{condition}")
 
-    stage1_n = int_secret("stage1_n", 12)
-    stage2_n = int_secret("stage2_n", 8)
+    stage1_n_limit = int_secret("stage1_n_max", len(DEFAULT_STAGE1_ITEM_IDS_20))
+    stage1_n = min(int_secret("stage1_n", len(DEFAULT_STAGE1_ITEM_IDS_20)), stage1_n_limit)
+    stage2_n = int_secret("stage2_n", 5)
     min_queries = int_secret("min_queries", 3)
     max_queries = int_secret("max_queries", 8)
-    stage1_prior_timeout_sec = int_secret("stage1_prior_timeout_sec", 180)
-    stage1_update_timeout_sec = int_secret("stage1_update_timeout_sec", 180)
+    stage1_timeout_limit = int_secret("stage1_timeout_max_sec", 120)
+    stage1_prior_timeout_sec = min(int_secret("stage1_prior_timeout_sec", 120), stage1_timeout_limit)
+    stage1_update_timeout_sec = min(int_secret("stage1_update_timeout_sec", 120), stage1_timeout_limit)
     stage2_query_timeout_sec = int_secret("stage2_query_timeout_sec", 480)
     stage2_answer_timeout_sec = int_secret("stage2_answer_timeout_sec", 240)
     if bool_secret("show_admin_controls", False):
         with st.expander("实验员设置"):
-            stage1_n = st.number_input("Stage 1 题数", min_value=1, max_value=80, value=stage1_n)
+            stage1_n = st.number_input("Stage 1 题数", min_value=1, max_value=max(1, min(80, stage1_n_limit)), value=stage1_n)
             stage2_n = st.number_input("Stage 2 题数", min_value=1, max_value=80, value=stage2_n)
             min_queries = st.number_input("Stage 2 每题最少查询次数", min_value=0, max_value=20, value=min_queries)
             max_queries = st.number_input("Stage 2 每题最多查询次数", min_value=1, max_value=20, value=max_queries)
-            stage1_prior_timeout_sec = st.number_input("Stage 1 初始判断时间上限（秒）", min_value=0, max_value=3600, value=stage1_prior_timeout_sec)
-            stage1_update_timeout_sec = st.number_input("Stage 1 更新判断时间上限（秒）", min_value=0, max_value=3600, value=stage1_update_timeout_sec)
+            stage1_prior_timeout_sec = st.number_input("Stage 1 初始判断时间上限（秒）", min_value=0, max_value=max(0, stage1_timeout_limit), value=stage1_prior_timeout_sec)
+            stage1_update_timeout_sec = st.number_input("Stage 1 更新判断时间上限（秒）", min_value=0, max_value=max(0, stage1_timeout_limit), value=stage1_update_timeout_sec)
             stage2_query_timeout_sec = st.number_input("Stage 2 查询页时间上限（秒）", min_value=0, max_value=3600, value=stage2_query_timeout_sec)
             stage2_answer_timeout_sec = st.number_input("Stage 2 答案页时间上限（秒）", min_value=0, max_value=3600, value=stage2_answer_timeout_sec)
     st.caption(f"预计第一部分 {stage1_n} 题；第二部分 {stage2_n} 题，每题查询 {min_queries}-{max_queries} 次。")
@@ -464,9 +506,11 @@ if st.session_state.page == "intro":
         rng = random.Random(seed)
         order = list(range(len(materials)))
         rng.shuffle(order)
+        selected_stage1_ids = set(stage1_item_ids())
         labelled_stage1 = [
             i for i, item in enumerate(materials)
             if str(item.get("suggested_stage", "")).strip().lower() == "stage1"
+            and (not selected_stage1_ids or str(item.get("item_id", "")).strip() in selected_stage1_ids)
         ]
         labelled_stage2 = [
             i for i, item in enumerate(materials)

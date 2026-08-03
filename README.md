@@ -53,7 +53,8 @@ stage1_lookup_prefix = "lookup_stage1_balanced"
 full_lookup_prefix = "lookup_full"
 condition = "balanced_stage1"
 
-stage1_n = 30
+stage1_n = 20
+stage1_n_max = 20
 stage2_n = 5
 min_queries = 3
 max_queries = 8
@@ -61,8 +62,9 @@ max_queries = 8
 require_desktop = true
 instruction_video_url = ""
 
-stage1_prior_timeout_sec = 180
-stage1_update_timeout_sec = 180
+stage1_prior_timeout_sec = 120
+stage1_update_timeout_sec = 120
+stage1_timeout_max_sec = 120
 stage2_query_timeout_sec = 480
 stage2_answer_timeout_sec = 240
 
