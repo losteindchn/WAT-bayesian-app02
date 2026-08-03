@@ -493,9 +493,9 @@ elif st.session_state.page == "training":
         """
 你要完成的是一个文字谜题联想任务。请不要直接搜索答案，也不要和别人讨论。
 
-**第一部分**：你会看到谜面和一个“初始线索词”。请用 0-100 的滑块判断它与谜底或关键机制有多相关。随后系统给出一个提示词和分数，你再更新判断。
+**第一部分**：你会看到谜面和一个“初始线索词”。请先判断“初始线索词”和“谜底或关键机制”有多相关。随后系统给出另一个“提示词”，以及“提示词”和“真实答案”的关联分数。这个分数不是初始线索词的分数；你的任务是根据提示词和分数，更新你对初始线索词的判断。
 
-**第二部分**：你会看到新的谜题。你不能立刻填写答案，而是先输入若干个想查询的词。系统只返回这个词与真实答案的关联分数。分数越高，说明这个词越接近真实答案。你觉得已经知道答案后，再进入答案页填写解释和体验问卷。
+**第二部分**：你会看到新的谜题。你不能立刻填写答案，而是先输入若干个想查询的词。系统只返回“你查询的词”和“真实答案”的关联分数。分数越高，说明你查询的词越接近真实答案。你觉得已经知道答案后，再进入答案页填写解释和体验问卷。
 
 所有滑块都是 0-100 分，请拖动圆点选择；不要只使用默认 50。
         """
@@ -522,11 +522,11 @@ elif st.session_state.page == "practice_stage1":
             reset_screen_timer()
             st.rerun()
     else:
-        st.info("分数表示提示词与真实答案的语义关联强度。")
+        st.info("下面的分数表示：提示词“钥匙”与真实答案之间的语义关联强度；它不是初始线索词“雨伞”的分数。")
         st.markdown("提示词：**钥匙**")
-        st.markdown("关联分数：**82 / 100**")
-        rating_slider("看到提示后，你现在的判断", "practice_updated")
-        rating_slider("你对当前判断的信心", "practice_conf")
+        st.markdown("提示词-答案关联分数：**82 / 100**")
+        rating_slider("看到提示词和分数后，你现在认为初始线索词“雨伞”与谜底或关键机制相关的可能性", "practice_updated")
+        rating_slider("你对这个更新后判断的信心", "practice_conf")
         if st.button("进入练习 2：主动查询"):
             st.session_state.page = "practice_stage2"
             st.session_state.practice2_history = []
@@ -550,7 +550,7 @@ elif st.session_state.page == "practice_stage2":
         if not q.strip():
             st.warning("请输入一个词。")
         else:
-            history.append({"第几次": len(history) + 1, "查询词": q.strip(), "关联分数": f"{score} / 100"})
+            history.append({"第几次": len(history) + 1, "查询词": q.strip(), "查询词-答案关联分数": f"{score} / 100"})
             st.session_state.practice2_history = history
             st.rerun()
     st.caption("正式实验中，每道题至少查询指定次数；达到次数后会出现“我知道答案了”按钮。")
@@ -609,11 +609,11 @@ elif st.session_state.page == "stage1":
     else:
         update_limit = int(st.session_state.get("stage1_update_timeout_sec", 0))
         show_time_rule(update_limit)
-        st.info("分数表示提示词与真实答案的语义关联强度。")
+        st.info(f"下面的分数表示：提示词“{fb['cue_word']}”与真实答案之间的语义关联强度；它不是初始线索词“{fb['anchor_word']}”的分数。")
         st.markdown(f"提示词：**{fb['cue_word']}**")
-        st.markdown(f"关联分数：**{fb['target_cue_score']} / 100**")
-        updated = rating_slider("看到提示后，你现在的判断", f"updated_{item_id}")
-        confidence = rating_slider("你对当前判断的信心", f"conf_{item_id}")
+        st.markdown(f"提示词-答案关联分数：**{fb['target_cue_score']} / 100**")
+        updated = rating_slider(f"看到提示词和分数后，你现在认为初始线索词“{fb['anchor_word']}”与谜底或关键机制相关的可能性", f"updated_{item_id}")
+        confidence = rating_slider("你对这个更新后判断的信心", f"conf_{item_id}")
         if st.button("提交本题", key=f"submit_stage1_{item_id}"):
             timeout = is_timed_out(update_limit)
             event = {
@@ -642,7 +642,7 @@ elif st.session_state.page == "stage1":
 
 elif st.session_state.page == "stage2_intro":
     st.title("第二部分：主动探索")
-    st.write("你可以输入词语来查询它与真实答案的关联强度。系统只会显示 0-100 的关联分数。")
+    st.write("你可以输入词语来查询它与真实答案的关联强度。系统只会显示“你查询的词”和“真实答案”的 0-100 关联分数。")
     st.write("请先通过查询词逐步探索，不要一开始就填写答案。达到最少查询次数后，如果你觉得知道答案了，可以进入答案页。")
     st.caption(f"每题至少查询 {st.session_state.get('min_queries', 0)} 次，最多查询 {st.session_state.max_queries} 次。")
     if st.button("进入第二部分"):
@@ -677,7 +677,7 @@ elif st.session_state.page == "stage2":
         show_time_rule(query_limit)
         if history:
             visible_history = [
-                {"第几次": h["query_index"], "查询词": h["query_raw"], "关联分数": f"{h['score']} / 100"}
+                {"第几次": h["query_index"], "查询词": h["query_raw"], "查询词-答案关联分数": f"{h['score']} / 100"}
                 for h in history
             ]
             st.write("已查询结果：")
@@ -761,7 +761,7 @@ elif st.session_state.page == "stage2":
         show_time_rule(answer_limit)
         if history:
             visible_history = [
-                {"第几次": h["query_index"], "查询词": h["query_raw"], "关联分数": f"{h['score']} / 100"}
+                {"第几次": h["query_index"], "查询词": h["query_raw"], "查询词-答案关联分数": f"{h['score']} / 100"}
                 for h in history
             ]
             st.write("你的查询结果：")
