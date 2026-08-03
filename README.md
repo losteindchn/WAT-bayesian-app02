@@ -58,6 +58,14 @@ stage2_n = 5
 min_queries = 3
 max_queries = 8
 
+require_desktop = true
+instruction_video_url = ""
+
+stage1_prior_timeout_sec = 180
+stage1_update_timeout_sec = 180
+stage2_query_timeout_sec = 480
+stage2_answer_timeout_sec = 240
+
 worksheet_name = "human_events_v2"
 gsheet_url = "https://docs.google.com/spreadsheets/d/..."
 randomization_salt = "replace-with-private-randomization-salt"
@@ -134,6 +142,9 @@ condition
 desktop_confirmed
 session_id
 elapsed_on_screen_sec
+screen_timeout_sec
+timeout_flag
+invalid_reason
 match_type
 match_confidence
 query_history
@@ -145,7 +156,40 @@ completion_code
 completion_code_hash
 ```
 
-## 
+## Participant-Facing Flow
+
+The current formal flow is:
+
+```text
+intro / consent / desktop confirmation
+  -> instruction page with optional video
+  -> practice Stage 1
+  -> practice Stage 2
+  -> formal Stage 1 passive update
+  -> formal Stage 2 query page
+  -> formal Stage 2 answer + aha questionnaire page
+  -> completion code
+```
+
+Stage 2 only shows participants their own query words and the 0-100 feedback
+scores. Resolver details such as matched word, match type, semantic candidates,
+and raw probabilities are stored in the event log but are not shown on screen.
+
+The formal study should remain desktop/laptop-only unless the IRB and analysis
+plan explicitly allow mobile participation. Mobile use changes reading,
+typing, and query behaviour, so non-desktop sessions should be treated as pilot
+or quality-control exceptions.
+
+## Public Repo Warning
+
+If the deployed Streamlit repo is public, materials and lookup files can expose
+answers or high-scoring query words. For formal data collection, prefer a
+private deployment or a deployment method where data files are not visible in a
+public GitHub repository.
+
+If a public Streamlit deployment is unavoidable, use the survey platform to
+control access, pass unique participant IDs, verify completion codes, and screen
+for repeated or suspicious submissions.
 
 ## Local Test
 

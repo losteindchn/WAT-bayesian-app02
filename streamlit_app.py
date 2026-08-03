@@ -32,7 +32,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.3-platform-ready"
+APP_VERSION = "human-two-stage-v2.4-training-timed-stage2-clean"
 
 
 st.set_page_config(page_title="文字谜题联想实验", layout="centered")
@@ -51,6 +51,9 @@ SHEET_COLUMNS = [
     "platform_source",
     "condition",
     "desktop_confirmed",
+    "screen_timeout_sec",
+    "timeout_flag",
+    "invalid_reason",
     "completion_code",
     "completion_code_hash",
     "group",
@@ -249,6 +252,9 @@ def init_state() -> None:
         st.session_state.stage1_idx = 0
         st.session_state.stage2_idx = 0
         st.session_state.stage1_phase = "prior"
+        st.session_state.stage2_phase = "query"
+        st.session_state.practice1_phase = "prior"
+        st.session_state.practice2_history = []
         st.session_state.responses = []
         st.session_state.explore_history = []
         st.session_state.screen_started_at = time.time()
@@ -266,6 +272,9 @@ def log_event(row: Dict[str, Any]) -> None:
     row.setdefault("platform_source", st.session_state.get("platform_source", ""))
     row.setdefault("condition", st.session_state.get("condition", ""))
     row.setdefault("desktop_confirmed", st.session_state.get("desktop_confirmed", ""))
+    row.setdefault("screen_timeout_sec", "")
+    row.setdefault("timeout_flag", False)
+    row.setdefault("invalid_reason", "")
     row.setdefault("completion_code", st.session_state.get("completion_code", ""))
     row.setdefault("completion_code_hash", st.session_state.get("completion_code_hash", ""))
     row.setdefault("age", st.session_state.get("age", ""))
@@ -341,6 +350,28 @@ def show_progress(stage: str, idx: int, total: int) -> None:
     st.progress(min(1.0, (idx + 1) / max(1, total)))
 
 
+def reset_screen_timer() -> None:
+    st.session_state.screen_started_at = time.time()
+
+
+def elapsed_screen_sec() -> float:
+    return time.time() - float(st.session_state.get("screen_started_at", time.time()))
+
+
+def is_timed_out(limit_sec: int) -> bool:
+    return bool(limit_sec and limit_sec > 0 and elapsed_screen_sec() > float(limit_sec))
+
+
+def show_time_rule(limit_sec: int) -> None:
+    if limit_sec and limit_sec > 0:
+        minutes = max(1, round(limit_sec / 60))
+        st.caption(f"本页作答时间上限约 {minutes} 分钟；超时后再提交将被记录为本轮无效。")
+
+
+def rating_slider(label: str, key: str) -> int:
+    return st.slider(f"{label}（0=完全没有，100=非常强；请拖动滑块选择）", 0, 100, 50, key=key)
+
+
 init_state()
 
 
@@ -361,7 +392,12 @@ if st.session_state.page == "intro":
     group_choice = st.selectbox("分组（若 ID 中包含 FH/FN/MH/MN，将自动使用 ID 中的分组）", list(GROUP_PROFILES.keys()), index=default_group_idx)
     age = st.number_input("年龄", min_value=10, max_value=99, value=20)
     native_chinese = st.selectbox("中文熟练程度", ["母语/近似母语", "熟练", "一般"])
+    require_desktop = bool_secret("require_desktop", True)
     desktop_confirmed = st.checkbox("我正在使用电脑或笔记本电脑完成实验。")
+    if require_desktop:
+        st.caption("正式实验只接受电脑或笔记本作答；手机屏幕会改变阅读、输入和查询体验，可能导致数据无效。")
+    else:
+        st.caption("当前允许非电脑设备进入，但设备信息会用于后续数据质量审核。")
     consent = st.checkbox("我已了解实验说明，并自愿参加。")
     st.caption(f"招募来源：{platform_source}；实验条件：{condition}")
 
@@ -369,12 +405,20 @@ if st.session_state.page == "intro":
     stage2_n = int_secret("stage2_n", 8)
     min_queries = int_secret("min_queries", 3)
     max_queries = int_secret("max_queries", 8)
+    stage1_prior_timeout_sec = int_secret("stage1_prior_timeout_sec", 180)
+    stage1_update_timeout_sec = int_secret("stage1_update_timeout_sec", 180)
+    stage2_query_timeout_sec = int_secret("stage2_query_timeout_sec", 480)
+    stage2_answer_timeout_sec = int_secret("stage2_answer_timeout_sec", 240)
     if bool_secret("show_admin_controls", False):
         with st.expander("实验员设置"):
             stage1_n = st.number_input("Stage 1 题数", min_value=1, max_value=80, value=stage1_n)
             stage2_n = st.number_input("Stage 2 题数", min_value=1, max_value=80, value=stage2_n)
             min_queries = st.number_input("Stage 2 每题最少查询次数", min_value=0, max_value=20, value=min_queries)
             max_queries = st.number_input("Stage 2 每题最多查询次数", min_value=1, max_value=20, value=max_queries)
+            stage1_prior_timeout_sec = st.number_input("Stage 1 初始判断时间上限（秒）", min_value=0, max_value=3600, value=stage1_prior_timeout_sec)
+            stage1_update_timeout_sec = st.number_input("Stage 1 更新判断时间上限（秒）", min_value=0, max_value=3600, value=stage1_update_timeout_sec)
+            stage2_query_timeout_sec = st.number_input("Stage 2 查询页时间上限（秒）", min_value=0, max_value=3600, value=stage2_query_timeout_sec)
+            stage2_answer_timeout_sec = st.number_input("Stage 2 答案页时间上限（秒）", min_value=0, max_value=3600, value=stage2_answer_timeout_sec)
     st.caption(f"预计第一部分 {stage1_n} 题；第二部分 {stage2_n} 题，每题查询 {min_queries}-{max_queries} 次。")
 
     if get_secret("gsheet_url") is None:
@@ -382,7 +426,7 @@ if st.session_state.page == "intro":
 
     if st.button("开始"):
         group = infer_group(pid, group_choice)
-        if not pid.strip() or not group or not consent or not desktop_confirmed:
+        if not pid.strip() or not group or not consent or (require_desktop and not desktop_confirmed):
             st.warning("请输入参与者 ID、确认分组，并确认知情同意和电脑端作答。")
             st.stop()
         if int(min_queries) > int(max_queries):
@@ -429,19 +473,90 @@ if st.session_state.page == "intro":
         st.session_state.stage2_n = len(order_stage2)
         st.session_state.min_queries = int(min_queries)
         st.session_state.max_queries = int(max_queries)
+        st.session_state.stage1_prior_timeout_sec = int(stage1_prior_timeout_sec)
+        st.session_state.stage1_update_timeout_sec = int(stage1_update_timeout_sec)
+        st.session_state.stage2_query_timeout_sec = int(stage2_query_timeout_sec)
+        st.session_state.stage2_answer_timeout_sec = int(stage2_answer_timeout_sec)
         st.session_state.order_stage1 = order_stage1
         st.session_state.order_stage2 = order_stage2
         st.session_state.page = "training"
+        reset_screen_timer()
         st.rerun()
 
 
 elif st.session_state.page == "training":
-    st.title("练习说明")
-    st.write("每道题会给出一个简短谜面。你不会看到真正答案。")
-    st.write("第一部分中，你会看到一个初始线索词，并先判断它与谜底或关键机制相关的可能性；随后看到一个提示词及其与真实答案的关联分数，再更新判断。")
-    st.write("第二部分中，你可以主动输入想查询的词，系统会返回该词与真实答案的关联分数。")
-    if st.button("进入第一部分"):
+    st.title("实验规则说明")
+    video_url = str(get_secret("instruction_video_url", "") or "").strip()
+    if video_url:
+        st.video(video_url)
+    st.markdown(
+        """
+你要完成的是一个文字谜题联想任务。请不要直接搜索答案，也不要和别人讨论。
+
+**第一部分**：你会看到谜面和一个“初始线索词”。请用 0-100 的滑块判断它与谜底或关键机制有多相关。随后系统给出一个提示词和分数，你再更新判断。
+
+**第二部分**：你会看到新的谜题。你不能立刻填写答案，而是先输入若干个想查询的词。系统只返回这个词与真实答案的关联分数。分数越高，说明这个词越接近真实答案。你觉得已经知道答案后，再进入答案页填写解释和体验问卷。
+
+所有滑块都是 0-100 分，请拖动圆点选择；不要只使用默认 50。
+        """
+    )
+    st.info("正式题目有时间上限。超时提交会被记录为本轮无效，所以请在理解题目后及时作答。")
+    if st.button("进入练习 1：判断更新"):
+        st.session_state.page = "practice_stage1"
+        st.session_state.practice1_phase = "prior"
+        reset_screen_timer()
+        st.rerun()
+
+
+elif st.session_state.page == "practice_stage1":
+    st.title("练习 1：如何使用滑块更新判断")
+    st.caption("这是练习题，不记录为正式数据。")
+    st.subheader("练习题：雨中的门口")
+    st.write("一个人站在门口，外面正在下雨。他看了一眼手里的东西，突然决定不出门了。")
+    st.markdown("初始线索词：**雨伞**")
+    if st.session_state.practice1_phase == "prior":
+        rating_slider("你认为这个线索词与谜底或关键机制相关的可能性", "practice_prior")
+        st.caption("请拖动滑块。0 表示完全无关，100 表示非常相关。")
+        if st.button("查看练习提示"):
+            st.session_state.practice1_phase = "update"
+            reset_screen_timer()
+            st.rerun()
+    else:
+        st.info("分数表示提示词与真实答案的语义关联强度。")
+        st.markdown("提示词：**钥匙**")
+        st.markdown("关联分数：**82 / 100**")
+        rating_slider("看到提示后，你现在的判断", "practice_updated")
+        rating_slider("你对当前判断的信心", "practice_conf")
+        if st.button("进入练习 2：主动查询"):
+            st.session_state.page = "practice_stage2"
+            st.session_state.practice2_history = []
+            reset_screen_timer()
+            st.rerun()
+
+
+elif st.session_state.page == "practice_stage2":
+    st.title("练习 2：如何主动查询")
+    st.caption("这是练习题，不记录为正式数据。")
+    st.subheader("练习题：打不开的门")
+    st.write("一个人回到家门口，却没有立刻进门。他在口袋里找了很久，然后笑了。")
+    practice_scores = {"钥匙": 90, "门": 72, "口袋": 61, "手机": 21, "蛋糕": 5}
+    history = st.session_state.practice2_history
+    if history:
+        st.write("练习查询结果：")
+        st.table(pd.DataFrame(history))
+    q = st.text_input("输入一个你想查询的词，例如：钥匙、门、手机", key="practice_query")
+    if st.button("查询练习词"):
+        score = practice_scores.get(q.strip(), 30 if q.strip() else 0)
+        if not q.strip():
+            st.warning("请输入一个词。")
+        else:
+            history.append({"第几次": len(history) + 1, "查询词": q.strip(), "关联分数": f"{score} / 100"})
+            st.session_state.practice2_history = history
+            st.rerun()
+    st.caption("正式实验中，每道题至少查询指定次数；达到次数后会出现“我知道答案了”按钮。")
+    if len(history) >= 1 and st.button("我已理解，进入第一部分正式实验"):
         st.session_state.page = "stage1"
+        reset_screen_timer()
         st.rerun()
 
 
@@ -462,22 +577,49 @@ elif st.session_state.page == "stage1":
     st.markdown(f"初始线索词：**{fb['anchor_word']}**")
 
     if st.session_state.stage1_phase == "prior":
-        prior = st.slider("你认为这个线索词与谜底或关键机制相关的可能性", 0, 100, 50, key=f"prior_{item_id}")
+        prior_limit = int(st.session_state.get("stage1_prior_timeout_sec", 0))
+        show_time_rule(prior_limit)
+        prior = rating_slider("你认为这个线索词与谜底或关键机制相关的可能性", f"prior_{item_id}")
         if st.button("查看提示", key=f"show_{item_id}"):
+            if is_timed_out(prior_limit):
+                event = {
+                    "participant_id": st.session_state.pid,
+                    "group": st.session_state.group,
+                    "stage": "stage1_timeout",
+                    "trial_set": "stage1",
+                    "item_id": item_id,
+                    "title": item.get("title", ""),
+                    "anchor_word": fb["anchor_word"],
+                    "cue_word": fb["cue_word"],
+                    "prior": prior / 100,
+                    "screen_timeout_sec": prior_limit,
+                    "timeout_flag": True,
+                    "invalid_reason": "stage1_prior_timeout",
+                }
+                add_researcher_fields(event, item, fb)
+                log_event(event)
+                st.session_state.stage1_idx += 1
+                st.session_state.stage1_phase = "prior"
+                st.warning("本轮已超时，系统已记录为无效并进入下一题。")
+                st.rerun()
             st.session_state.temp_prior = prior
             st.session_state.stage1_phase = "update"
+            reset_screen_timer()
             st.rerun()
     else:
+        update_limit = int(st.session_state.get("stage1_update_timeout_sec", 0))
+        show_time_rule(update_limit)
         st.info("分数表示提示词与真实答案的语义关联强度。")
         st.markdown(f"提示词：**{fb['cue_word']}**")
         st.markdown(f"关联分数：**{fb['target_cue_score']} / 100**")
-        updated = st.slider("看到提示后，你现在的判断", 0, 100, 50, key=f"updated_{item_id}")
-        confidence = st.slider("你对当前判断的信心", 0, 100, 50, key=f"conf_{item_id}")
+        updated = rating_slider("看到提示后，你现在的判断", f"updated_{item_id}")
+        confidence = rating_slider("你对当前判断的信心", f"conf_{item_id}")
         if st.button("提交本题", key=f"submit_stage1_{item_id}"):
+            timeout = is_timed_out(update_limit)
             event = {
                     "participant_id": st.session_state.pid,
                     "group": st.session_state.group,
-                    "stage": "stage1_passive_update",
+                    "stage": "stage1_timeout" if timeout else "stage1_passive_update",
                     "trial_set": "stage1",
                     "item_id": item_id,
                     "title": item.get("title", ""),
@@ -487,6 +629,9 @@ elif st.session_state.page == "stage1":
                     "prior": st.session_state.temp_prior / 100,
                     "updated": updated / 100,
                     "confidence": confidence / 100,
+                    "screen_timeout_sec": update_limit,
+                    "timeout_flag": timeout,
+                    "invalid_reason": "stage1_update_timeout" if timeout else "",
                 }
             add_researcher_fields(event, item, fb)
             log_event(event)
@@ -497,11 +642,14 @@ elif st.session_state.page == "stage1":
 
 elif st.session_state.page == "stage2_intro":
     st.title("第二部分：主动探索")
-    st.write("你可以输入词语来查询它与真实答案的关联强度。查询次数有限；准备好后进入第二部分。")
+    st.write("你可以输入词语来查询它与真实答案的关联强度。系统只会显示 0-100 的关联分数。")
+    st.write("请先通过查询词逐步探索，不要一开始就填写答案。达到最少查询次数后，如果你觉得知道答案了，可以进入答案页。")
     st.caption(f"每题至少查询 {st.session_state.get('min_queries', 0)} 次，最多查询 {st.session_state.max_queries} 次。")
     if st.button("进入第二部分"):
         st.session_state.page = "stage2"
+        st.session_state.stage2_phase = "query"
         st.session_state.explore_history = []
+        reset_screen_timer()
         st.rerun()
 
 
@@ -523,86 +671,134 @@ elif st.session_state.page == "stage2":
     st.write(item["riddle_text"])
 
     history = st.session_state.explore_history
-    if history:
-        st.write("已查询：")
-        st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
+    min_queries = int(st.session_state.get("min_queries", 0))
+    if st.session_state.get("stage2_phase", "query") == "query":
+        query_limit = int(st.session_state.get("stage2_query_timeout_sec", 0))
+        show_time_rule(query_limit)
+        if history:
+            visible_history = [
+                {"第几次": h["query_index"], "查询词": h["query_raw"], "关联分数": f"{h['score']} / 100"}
+                for h in history
+            ]
+            st.write("已查询结果：")
+            st.table(pd.DataFrame(visible_history))
 
-    if len(history) < st.session_state.max_queries:
-        query = st.text_input("输入一个你想查询的词", key=f"query_{item_id}_{len(history)}")
-        if st.button("查询", key=f"do_query_{item_id}_{len(history)}"):
-            resolution = resolve_query_feedback(
-                query,
-                target_word=item.get("network_target_word", ""),
-                scores=scores,
-                grounding_config=grounding_config,
-                semantic_index=semantic_index,
-            )
-            if not resolution.has_feedback:
-                st.warning("词表中没有找到该词或近似词，请换一个更常见的词。")
-                st.stop()
+        st.caption(f"已查询 {len(history)} / {st.session_state.max_queries} 次；至少 {min_queries} 次后可以进入答案页。")
+        if len(history) < st.session_state.max_queries:
+            query = st.text_input("输入一个你想查询的词", key=f"query_{item_id}_{len(history)}")
+            if st.button("查询", key=f"do_query_{item_id}_{len(history)}"):
+                if is_timed_out(query_limit):
+                    event = {
+                        "participant_id": st.session_state.pid,
+                        "group": st.session_state.group,
+                        "stage": "stage2_timeout",
+                        "trial_set": "stage2",
+                        "item_id": item_id,
+                        "title": item.get("title", ""),
+                        "n_queries": len(history),
+                        "query_history": history,
+                        "screen_timeout_sec": query_limit,
+                        "timeout_flag": True,
+                        "invalid_reason": "stage2_query_timeout",
+                    }
+                    add_researcher_fields(event, item)
+                    log_event(event)
+                    st.session_state.stage2_idx += 1
+                    st.session_state.stage2_phase = "query"
+                    st.session_state.explore_history = []
+                    st.warning("本题查询阶段已超时，系统已记录为无效并进入下一题。")
+                    st.rerun()
+                resolution = resolve_query_feedback(
+                    query,
+                    target_word=item.get("network_target_word", ""),
+                    scores=scores,
+                    grounding_config=grounding_config,
+                    semantic_index=semantic_index,
+                )
+                if not resolution.has_feedback:
+                    st.warning("词表中没有找到该词或近似词，请换一个更常见的词。")
+                    st.stop()
+                event = {
+                    "participant_id": st.session_state.pid,
+                    "group": st.session_state.group,
+                    "stage": "stage2_active_query",
+                    "trial_set": "stage2",
+                    "item_id": item_id,
+                    "title": item.get("title", ""),
+                    "query_index": len(history) + 1,
+                    "query_raw": query,
+                }
+                event.update(resolution.as_event_fields())
+                event["query_word"] = resolution.matched_word
+                add_researcher_fields(event, item)
+                log_event(event)
+                history.append(
+                    {
+                        "query_index": len(history) + 1,
+                        "query_raw": query.strip(),
+                        "query_word": resolution.matched_word,
+                        "matched_word": resolution.matched_word,
+                        "match_type": resolution.match_type,
+                        "match_confidence": round(float(resolution.match_confidence), 4),
+                        "resolver_source": resolution.resolver_source,
+                        "feedback_prob": resolution.feedback_prob,
+                        "score": resolution.feedback_score,
+                    }
+                )
+                st.session_state.explore_history = history
+                st.rerun()
+
+        can_answer = len(history) >= min_queries
+        if can_answer:
+            if st.button("我知道答案了，进入答案页", key=f"know_{item_id}"):
+                st.session_state.stage2_phase = "answer"
+                reset_screen_timer()
+                st.rerun()
+        else:
+            st.caption(f"还需要至少查询 {min_queries - len(history)} 次。")
+    else:
+        answer_limit = int(st.session_state.get("stage2_answer_timeout_sec", 0))
+        show_time_rule(answer_limit)
+        if history:
+            visible_history = [
+                {"第几次": h["query_index"], "查询词": h["query_raw"], "关联分数": f"{h['score']} / 100"}
+                for h in history
+            ]
+            st.write("你的查询结果：")
+            st.table(pd.DataFrame(visible_history))
+        guess = st.text_area("请写下你的最终答案/解释", key=f"guess_{item_id}")
+        aha = rating_slider("你是否有突然明白的感觉", f"aha_{item_id}")
+        aha_suddenness = rating_slider("这个想法出现得有多突然", f"aha_sudden_{item_id}")
+        aha_surprise = rating_slider("这个答案让你有多惊讶", f"aha_surprise_{item_id}")
+        confidence = rating_slider("你对最终答案的信心", f"final_conf_{item_id}")
+        known_story = st.radio("你之前是否知道这个谜题或答案？", ["否", "不确定", "是"], horizontal=True, key=f"known_{item_id}")
+        if st.button("提交并进入下一题", key=f"finish_{item_id}"):
+            timeout = is_timed_out(answer_limit)
             event = {
-                "participant_id": st.session_state.pid,
-                "group": st.session_state.group,
-                "stage": "stage2_active_query",
-                "trial_set": "stage2",
-                "item_id": item_id,
-                "title": item.get("title", ""),
-                "query_index": len(history) + 1,
-            }
-            event.update(resolution.as_event_fields())
-            event["query_word"] = resolution.matched_word
+                    "participant_id": st.session_state.pid,
+                    "group": st.session_state.group,
+                    "stage": "stage2_timeout" if timeout else "stage2_final_guess",
+                    "trial_set": "stage2",
+                    "item_id": item_id,
+                    "title": item.get("title", ""),
+                    "guess": guess,
+                    "aha": aha / 100,
+                    "aha_suddenness": aha_suddenness / 100,
+                    "aha_surprise": aha_surprise / 100,
+                    "confidence": confidence / 100,
+                    "known_story": known_story,
+                    "n_queries": len(history),
+                    "query_history": history,
+                    "screen_timeout_sec": answer_limit,
+                    "timeout_flag": timeout,
+                    "invalid_reason": "stage2_answer_timeout" if timeout else "",
+                }
             add_researcher_fields(event, item)
             log_event(event)
-            history.append(
-                {
-                    "query_word": resolution.matched_word,
-                    "matched_word": resolution.matched_word,
-                    "match_type": resolution.match_type,
-                    "match_confidence": round(float(resolution.match_confidence), 4),
-                    "grounded_words": resolution.as_event_fields().get("grounded_words", ""),
-                    "grounding_weights": resolution.as_event_fields().get("grounding_weights", ""),
-                    "grounding_method": resolution.as_event_fields().get("grounding_method", ""),
-                    "semantic_candidates": resolution.as_event_fields().get("semantic_candidates", ""),
-                    "semantic_similarities": resolution.as_event_fields().get("semantic_similarities", ""),
-                    "resolver_source": resolution.resolver_source,
-                    "feedback_prob": resolution.feedback_prob,
-                    "score": resolution.feedback_score,
-                }
-            )
-            st.session_state.explore_history = history
+            st.session_state.stage2_idx += 1
+            st.session_state.stage2_phase = "query"
+            st.session_state.explore_history = []
             st.rerun()
-
-    guess = st.text_input("最终答案/解释", key=f"guess_{item_id}")
-    aha = st.slider("你是否有突然明白的感觉", 0, 100, 50, key=f"aha_{item_id}")
-    aha_suddenness = st.slider("这个想法出现得有多突然", 0, 100, 50, key=f"aha_sudden_{item_id}")
-    aha_surprise = st.slider("这个答案让你有多惊讶", 0, 100, 50, key=f"aha_surprise_{item_id}")
-    confidence = st.slider("你对最终答案的信心", 0, 100, 50, key=f"final_conf_{item_id}")
-    known_story = st.radio("你之前是否知道这个谜题或答案？", ["否", "不确定", "是"], horizontal=True, key=f"known_{item_id}")
-    min_queries = int(st.session_state.get("min_queries", 0))
-    if len(history) < min_queries:
-        st.caption(f"请至少查询 {min_queries} 次后再提交。")
-    if st.button("提交并进入下一题", key=f"finish_{item_id}", disabled=len(history) < min_queries):
-        event = {
-                "participant_id": st.session_state.pid,
-                "group": st.session_state.group,
-                "stage": "stage2_final_guess",
-                "trial_set": "stage2",
-                "item_id": item_id,
-                "title": item.get("title", ""),
-                "guess": guess,
-                "aha": aha / 100,
-                "aha_suddenness": aha_suddenness / 100,
-                "aha_surprise": aha_surprise / 100,
-                "confidence": confidence / 100,
-                "known_story": known_story,
-                "n_queries": len(history),
-                "query_history": history,
-            }
-        add_researcher_fields(event, item)
-        log_event(event)
-        st.session_state.stage2_idx += 1
-        st.session_state.explore_history = []
-        st.rerun()
 
 
 elif st.session_state.page == "done":
