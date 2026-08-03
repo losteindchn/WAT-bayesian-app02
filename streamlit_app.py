@@ -372,6 +372,32 @@ def rating_slider(label: str, key: str) -> int:
     return st.slider(f"{label}（0=完全没有，100=非常强；请拖动滑块选择）", 0, 100, 50, key=key)
 
 
+def clean_query_word(text: Any) -> str:
+    return str(text or "").strip()
+
+
+def query_key(text: Any) -> str:
+    return "".join(clean_query_word(text).split()).lower()
+
+
+def query_already_used(history: List[Dict[str, Any]], query_raw: Any = "", matched_word: Any = "") -> bool:
+    current = {query_key(query_raw), query_key(matched_word)}
+    current.discard("")
+    if not current:
+        return False
+    for row in history:
+        previous = {
+            query_key(row.get("query_raw", "")),
+            query_key(row.get("query_word", "")),
+            query_key(row.get("matched_word", "")),
+            query_key(row.get("查询词", "")),
+        }
+        previous.discard("")
+        if current & previous:
+            return True
+    return False
+
+
 init_state()
 
 
@@ -545,12 +571,16 @@ elif st.session_state.page == "practice_stage2":
         st.write("练习查询结果：")
         st.table(pd.DataFrame(history))
     q = st.text_input("输入一个你想查询的词，例如：钥匙、门、手机", key="practice_query")
+    st.caption("同一道题中不要重复查询同一个词；重复输入不会计入查询次数。")
     if st.button("查询练习词"):
-        score = practice_scores.get(q.strip(), 30 if q.strip() else 0)
-        if not q.strip():
+        query_clean = clean_query_word(q)
+        score = practice_scores.get(query_clean, 30 if query_clean else 0)
+        if not query_clean:
             st.warning("请输入一个词。")
+        elif query_already_used(history, query_raw=query_clean):
+            st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
         else:
-            history.append({"第几次": len(history) + 1, "查询词": q.strip(), "查询词-答案关联分数": f"{score} / 100"})
+            history.append({"第几次": len(history) + 1, "查询词": query_clean, "查询词-答案关联分数": f"{score} / 100"})
             st.session_state.practice2_history = history
             st.rerun()
     st.caption("正式实验中，每道题至少查询指定次数；达到次数后会出现“我知道答案了”按钮。")
@@ -644,6 +674,7 @@ elif st.session_state.page == "stage2_intro":
     st.title("第二部分：主动探索")
     st.write("你可以输入词语来查询它与真实答案的关联强度。系统只会显示“你查询的词”和“真实答案”的 0-100 关联分数。")
     st.write("请先通过查询词逐步探索，不要一开始就填写答案。达到最少查询次数后，如果你觉得知道答案了，可以进入答案页。")
+    st.write("同一道题中不要重复查询同一个词；重复输入不会计入查询次数。")
     st.caption(f"每题至少查询 {st.session_state.get('min_queries', 0)} 次，最多查询 {st.session_state.max_queries} 次。")
     if st.button("进入第二部分"):
         st.session_state.page = "stage2"
@@ -686,6 +717,7 @@ elif st.session_state.page == "stage2":
         st.caption(f"已查询 {len(history)} / {st.session_state.max_queries} 次；至少 {min_queries} 次后可以进入答案页。")
         if len(history) < st.session_state.max_queries:
             query = st.text_input("输入一个你想查询的词", key=f"query_{item_id}_{len(history)}")
+            st.caption("请换用新的查询词；已经查询过的词不会重复计数。")
             if st.button("查询", key=f"do_query_{item_id}_{len(history)}"):
                 if is_timed_out(query_limit):
                     event = {
@@ -708,8 +740,15 @@ elif st.session_state.page == "stage2":
                     st.session_state.explore_history = []
                     st.warning("本题查询阶段已超时，系统已记录为无效并进入下一题。")
                     st.rerun()
+                query_clean = clean_query_word(query)
+                if not query_clean:
+                    st.warning("请输入一个词。")
+                    st.stop()
+                if query_already_used(history, query_raw=query_clean):
+                    st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
+                    st.stop()
                 resolution = resolve_query_feedback(
-                    query,
+                    query_clean,
                     target_word=item.get("network_target_word", ""),
                     scores=scores,
                     grounding_config=grounding_config,
@@ -717,6 +756,9 @@ elif st.session_state.page == "stage2":
                 )
                 if not resolution.has_feedback:
                     st.warning("词表中没有找到该词或近似词，请换一个更常见的词。")
+                    st.stop()
+                if query_already_used(history, query_raw=query_clean, matched_word=resolution.matched_word):
+                    st.warning("这个词对应的查询结果已经出现过了，请换一个新词；本次不计入查询次数。")
                     st.stop()
                 event = {
                     "participant_id": st.session_state.pid,
@@ -726,7 +768,7 @@ elif st.session_state.page == "stage2":
                     "item_id": item_id,
                     "title": item.get("title", ""),
                     "query_index": len(history) + 1,
-                    "query_raw": query,
+                    "query_raw": query_clean,
                 }
                 event.update(resolution.as_event_fields())
                 event["query_word"] = resolution.matched_word
@@ -735,7 +777,7 @@ elif st.session_state.page == "stage2":
                 history.append(
                     {
                         "query_index": len(history) + 1,
-                        "query_raw": query.strip(),
+                        "query_raw": query_clean,
                         "query_word": resolution.matched_word,
                         "matched_word": resolution.matched_word,
                         "match_type": resolution.match_type,
