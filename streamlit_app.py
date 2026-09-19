@@ -32,7 +32,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.5-stage1-20"
+APP_VERSION = "human-two-stage-v2.6-quality-gated-code"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -78,8 +78,14 @@ SHEET_COLUMNS = [
     "screen_timeout_sec",
     "timeout_flag",
     "invalid_reason",
+    "quality_status",
+    "quality_pass",
+    "quality_flags",
+    "quality_summary",
+    "payment_eligible",
     "completion_code",
     "completion_code_hash",
+    "review_code",
     "group",
     "age",
     "native_chinese",
@@ -105,6 +111,16 @@ SHEET_COLUMNS = [
     "known_story",
     "n_queries",
     "guess",
+    "total_duration_sec",
+    "stage1_valid_count",
+    "stage1_timeout_count",
+    "stage2_query_count",
+    "stage2_final_count",
+    "stage2_timeout_count",
+    "empty_query_attempts",
+    "duplicate_query_attempts",
+    "no_feedback_query_attempts",
+    "invalid_query_attempts",
     "elapsed_on_screen_sec",
     "payload_json",
 ]
@@ -176,6 +192,12 @@ def completion_code(pid: str, session_id: str, group: str) -> str:
     salt = str(get_secret("completion_salt", "human-two-stage-v2"))
     digest = hashlib.sha256(f"{salt}::{pid}::{session_id}::{group}".encode("utf-8")).hexdigest()
     return f"INS-{digest[:10].upper()}"
+
+
+def review_code(pid: str, session_id: str, group: str) -> str:
+    salt = str(get_secret("completion_salt", "human-two-stage-v2"))
+    digest = hashlib.sha256(f"{salt}::review::{pid}::{session_id}::{group}".encode("utf-8")).hexdigest()
+    return f"REVIEW-{digest[:10].upper()}"
 
 
 def completion_hash(code: str) -> str:
@@ -298,6 +320,11 @@ def init_state() -> None:
         st.session_state.responses = []
         st.session_state.explore_history = []
         st.session_state.screen_started_at = time.time()
+        st.session_state.experiment_started_at = time.time()
+        st.session_state.empty_query_attempts = 0
+        st.session_state.duplicate_query_attempts = 0
+        st.session_state.no_feedback_query_attempts = 0
+        st.session_state.invalid_query_attempts = 0
 
 
 def log_event(row: Dict[str, Any]) -> None:
@@ -315,8 +342,14 @@ def log_event(row: Dict[str, Any]) -> None:
     row.setdefault("screen_timeout_sec", "")
     row.setdefault("timeout_flag", False)
     row.setdefault("invalid_reason", "")
+    row.setdefault("quality_status", st.session_state.get("quality_status", ""))
+    row.setdefault("quality_pass", st.session_state.get("quality_pass", ""))
+    row.setdefault("quality_flags", st.session_state.get("quality_flags", ""))
+    row.setdefault("quality_summary", st.session_state.get("quality_summary", ""))
+    row.setdefault("payment_eligible", st.session_state.get("payment_eligible", ""))
     row.setdefault("completion_code", st.session_state.get("completion_code", ""))
     row.setdefault("completion_code_hash", st.session_state.get("completion_code_hash", ""))
+    row.setdefault("review_code", st.session_state.get("review_code", ""))
     row.setdefault("age", st.session_state.get("age", ""))
     row.setdefault("native_chinese", st.session_state.get("native_chinese", ""))
     row.setdefault("page", st.session_state.get("page", ""))
@@ -436,6 +469,112 @@ def query_already_used(history: List[Dict[str, Any]], query_raw: Any = "", match
         if current & previous:
             return True
     return False
+
+
+def increment_counter(name: str) -> None:
+    st.session_state[name] = int(st.session_state.get(name, 0)) + 1
+
+
+def reset_formal_quality_state() -> None:
+    st.session_state.experiment_started_at = time.time()
+    for name in [
+        "empty_query_attempts",
+        "duplicate_query_attempts",
+        "no_feedback_query_attempts",
+        "invalid_query_attempts",
+    ]:
+        st.session_state[name] = 0
+
+
+def quality_thresholds() -> Dict[str, int]:
+    return {
+        "min_total_duration_sec": int_secret("min_total_duration_sec", 900),
+        "max_stage1_timeout_count": int_secret("max_stage1_timeout_count", 2),
+        "max_stage2_timeout_count": int_secret("max_stage2_timeout_count", 0),
+        "max_invalid_query_attempts": int_secret("max_invalid_query_attempts", 8),
+        "max_duplicate_query_attempts": int_secret("max_duplicate_query_attempts", 6),
+        "max_empty_query_attempts": int_secret("max_empty_query_attempts", 5),
+        "max_no_feedback_query_attempts": int_secret("max_no_feedback_query_attempts", 8),
+    }
+
+
+def evaluate_completion_quality() -> Dict[str, Any]:
+    responses = list(st.session_state.get("responses", []))
+    expected_stage1 = int(st.session_state.get("stage1_n", 0))
+    expected_stage2 = int(st.session_state.get("stage2_n", 0))
+    total_duration = round(time.time() - float(st.session_state.get("experiment_started_at", time.time())), 3)
+
+    stage1_valid = [r for r in responses if r.get("stage") == "stage1_passive_update"]
+    stage1_timeouts = [r for r in responses if r.get("stage") == "stage1_timeout"]
+    stage2_queries = [r for r in responses if r.get("stage") == "stage2_active_query"]
+    stage2_finals = [r for r in responses if r.get("stage") == "stage2_final_guess"]
+    stage2_timeouts = [r for r in responses if r.get("stage") == "stage2_timeout"]
+    known_story_yes = [
+        r for r in stage2_finals
+        if str(r.get("known_story", "")).strip() == "是"
+    ]
+
+    counters = {
+        "total_duration_sec": total_duration,
+        "stage1_valid_count": len(stage1_valid),
+        "stage1_timeout_count": len(stage1_timeouts),
+        "stage2_query_count": len(stage2_queries),
+        "stage2_final_count": len(stage2_finals),
+        "stage2_timeout_count": len(stage2_timeouts),
+        "empty_query_attempts": int(st.session_state.get("empty_query_attempts", 0)),
+        "duplicate_query_attempts": int(st.session_state.get("duplicate_query_attempts", 0)),
+        "no_feedback_query_attempts": int(st.session_state.get("no_feedback_query_attempts", 0)),
+    }
+    counters["invalid_query_attempts"] = (
+        counters["empty_query_attempts"]
+        + counters["duplicate_query_attempts"]
+        + counters["no_feedback_query_attempts"]
+        + int(st.session_state.get("invalid_query_attempts", 0))
+    )
+    thresholds = quality_thresholds()
+
+    flags = []
+    if len(stage1_valid) < expected_stage1:
+        flags.append("incomplete_stage1")
+    if len(stage2_finals) < expected_stage2:
+        flags.append("incomplete_stage2")
+    if total_duration < thresholds["min_total_duration_sec"]:
+        flags.append("too_fast")
+    if len(stage1_timeouts) > thresholds["max_stage1_timeout_count"]:
+        flags.append("too_many_stage1_timeouts")
+    if len(stage2_timeouts) > thresholds["max_stage2_timeout_count"]:
+        flags.append("stage2_timeout")
+    if counters["invalid_query_attempts"] > thresholds["max_invalid_query_attempts"]:
+        flags.append("too_many_invalid_queries")
+    if counters["duplicate_query_attempts"] > thresholds["max_duplicate_query_attempts"]:
+        flags.append("too_many_duplicate_queries")
+    if counters["empty_query_attempts"] > thresholds["max_empty_query_attempts"]:
+        flags.append("too_many_empty_queries")
+    if counters["no_feedback_query_attempts"] > thresholds["max_no_feedback_query_attempts"]:
+        flags.append("too_many_no_feedback_queries")
+    if not bool(st.session_state.get("desktop_confirmed", False)):
+        flags.append("desktop_not_confirmed")
+    if expected_stage2 and len(known_story_yes) >= max(2, expected_stage2):
+        flags.append("known_story_all_or_most")
+
+    status = "valid" if not flags else "review"
+    summary = dict(counters)
+    summary.update(
+        {
+            "expected_stage1": expected_stage1,
+            "expected_stage2": expected_stage2,
+            "known_story_yes_count": len(known_story_yes),
+            "thresholds": thresholds,
+        }
+    )
+    return {
+        "quality_status": status,
+        "quality_pass": not flags,
+        "payment_eligible": not flags,
+        "quality_flags": flags,
+        "quality_summary": summary,
+        **counters,
+    }
 
 
 init_state()
@@ -629,6 +768,7 @@ elif st.session_state.page == "practice_stage2":
             st.rerun()
     st.caption("正式实验中，每道题至少查询指定次数；达到次数后会出现“我知道答案了”按钮。")
     if len(history) >= 1 and st.button("我已理解，进入第一部分正式实验"):
+        reset_formal_quality_state()
         st.session_state.page = "stage1"
         reset_screen_timer()
         st.rerun()
@@ -786,9 +926,11 @@ elif st.session_state.page == "stage2":
                     st.rerun()
                 query_clean = clean_query_word(query)
                 if not query_clean:
+                    increment_counter("empty_query_attempts")
                     st.warning("请输入一个词。")
                     st.stop()
                 if query_already_used(history, query_raw=query_clean):
+                    increment_counter("duplicate_query_attempts")
                     st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
                     st.stop()
                 resolution = resolve_query_feedback(
@@ -799,9 +941,11 @@ elif st.session_state.page == "stage2":
                     semantic_index=semantic_index,
                 )
                 if not resolution.has_feedback:
+                    increment_counter("no_feedback_query_attempts")
                     st.warning("词表中没有找到该词或近似词，请换一个更常见的词。")
                     st.stop()
                 if query_already_used(history, query_raw=query_clean, matched_word=resolution.matched_word):
+                    increment_counter("duplicate_query_attempts")
                     st.warning("这个词对应的查询结果已经出现过了，请换一个新词；本次不计入查询次数。")
                     st.stop()
                 event = {
@@ -888,27 +1032,85 @@ elif st.session_state.page == "stage2":
 
 
 elif st.session_state.page == "done":
-    if "completion_code" not in st.session_state:
-        code = completion_code(st.session_state.get("pid", ""), st.session_state.get("session_id", ""), st.session_state.get("group", ""))
-        st.session_state.completion_code = code
-        st.session_state.completion_code_hash = completion_hash(code)
+    if "quality_evaluated" not in st.session_state:
+        quality = evaluate_completion_quality()
+        st.session_state.quality_evaluated = True
+        st.session_state.quality_status = quality["quality_status"]
+        st.session_state.quality_pass = bool(quality["quality_pass"])
+        st.session_state.payment_eligible = bool(quality["payment_eligible"])
+        st.session_state.quality_flags = ",".join(quality["quality_flags"])
+        st.session_state.quality_summary = json.dumps(quality["quality_summary"], ensure_ascii=False, default=str)
+        for key in [
+            "total_duration_sec",
+            "stage1_valid_count",
+            "stage1_timeout_count",
+            "stage2_query_count",
+            "stage2_final_count",
+            "stage2_timeout_count",
+            "empty_query_attempts",
+            "duplicate_query_attempts",
+            "no_feedback_query_attempts",
+            "invalid_query_attempts",
+        ]:
+            st.session_state[key] = quality[key]
+
+        if quality["quality_pass"]:
+            code = completion_code(st.session_state.get("pid", ""), st.session_state.get("session_id", ""), st.session_state.get("group", ""))
+            st.session_state.completion_code = code
+            st.session_state.completion_code_hash = completion_hash(code)
+            st.session_state.review_code = ""
+            stage_name = "completion_valid"
+        else:
+            code = review_code(st.session_state.get("pid", ""), st.session_state.get("session_id", ""), st.session_state.get("group", ""))
+            st.session_state.completion_code = ""
+            st.session_state.completion_code_hash = ""
+            st.session_state.review_code = code
+            stage_name = "completion_review"
+
         log_event(
             {
                 "participant_id": st.session_state.get("pid", ""),
                 "group": st.session_state.get("group", ""),
-                "stage": "completion",
+                "stage": stage_name,
                 "trial_set": "completion",
-                "completion_code": code,
-                "completion_code_hash": st.session_state.completion_code_hash,
+                "completion_code": st.session_state.get("completion_code", ""),
+                "completion_code_hash": st.session_state.get("completion_code_hash", ""),
+                "review_code": st.session_state.get("review_code", ""),
+                "quality_status": st.session_state.get("quality_status", ""),
+                "quality_pass": st.session_state.get("quality_pass", ""),
+                "quality_flags": st.session_state.get("quality_flags", ""),
+                "quality_summary": st.session_state.get("quality_summary", ""),
+                "payment_eligible": st.session_state.get("payment_eligible", ""),
                 "n_stage1_trials": st.session_state.get("stage1_n", ""),
                 "n_stage2_trials": st.session_state.get("stage2_n", ""),
+                "total_duration_sec": st.session_state.get("total_duration_sec", ""),
+                "stage1_valid_count": st.session_state.get("stage1_valid_count", ""),
+                "stage1_timeout_count": st.session_state.get("stage1_timeout_count", ""),
+                "stage2_query_count": st.session_state.get("stage2_query_count", ""),
+                "stage2_final_count": st.session_state.get("stage2_final_count", ""),
+                "stage2_timeout_count": st.session_state.get("stage2_timeout_count", ""),
+                "empty_query_attempts": st.session_state.get("empty_query_attempts", ""),
+                "duplicate_query_attempts": st.session_state.get("duplicate_query_attempts", ""),
+                "no_feedback_query_attempts": st.session_state.get("no_feedback_query_attempts", ""),
+                "invalid_query_attempts": st.session_state.get("invalid_query_attempts", ""),
             }
         )
     st.success("实验完成，感谢参与。")
-    st.subheader("完成码")
-    st.code(st.session_state.completion_code)
-    st.caption("请返回问卷平台填写该完成码，以便核验完成状态和发放报酬。")
-    final_return_url = build_return_url(st.session_state.get("return_url", ""), st.session_state.get("pid", ""), st.session_state.completion_code)
+    if st.session_state.get("quality_pass"):
+        st.subheader("完成码")
+        st.code(st.session_state.completion_code)
+        st.caption("请返回问卷平台填写该完成码，以便核验完成状态和发放报酬。")
+        return_code = st.session_state.completion_code
+    else:
+        st.warning("你的实验记录需要人工审核。当前不会生成正式完成码。")
+        st.subheader("人工审核编号")
+        st.code(st.session_state.review_code)
+        st.caption("请返回问卷平台填写该人工审核编号。研究者会根据完整记录决定是否采纳和发放报酬。")
+        with st.expander("为什么需要人工审核？"):
+            flags = st.session_state.get("quality_flags", "")
+            st.write(flags or "系统质量检查发现需要人工确认。")
+        return_code = st.session_state.review_code
+    final_return_url = build_return_url(st.session_state.get("return_url", ""), st.session_state.get("pid", ""), return_code)
     if final_return_url:
         if hasattr(st, "link_button"):
             st.link_button("返回问卷平台", final_return_url)

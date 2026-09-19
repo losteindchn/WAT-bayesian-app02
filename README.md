@@ -10,7 +10,7 @@ layer only.
 survey platform screening / consent / demographic quota
   -> Streamlit URL with participant parameters
   -> Stage 1 passive update + Stage 2 active query task
-  -> Streamlit completion code
+  -> Streamlit quality gate and completion/review code
   -> participant returns to survey platform
   -> completion-code validation and payment
 ```
@@ -68,6 +68,17 @@ stage1_timeout_max_sec = 120
 stage2_query_timeout_sec = 480
 stage2_answer_timeout_sec = 240
 
+# Completion-code quality gate.
+# A valid INS-* completion code is shown only when these checks pass.
+# Otherwise the participant receives a REVIEW-* code for manual review.
+min_total_duration_sec = 900
+max_stage1_timeout_count = 2
+max_stage2_timeout_count = 0
+max_invalid_query_attempts = 8
+max_duplicate_query_attempts = 6
+max_empty_query_attempts = 5
+max_no_feedback_query_attempts = 8
+
 worksheet_name = "human_events_v2"
 gsheet_url = "https://docs.google.com/spreadsheets/d/..."
 randomization_salt = "replace-with-private-randomization-salt"
@@ -89,9 +100,27 @@ client_x509_cert_url = "..."
 For a shorter human session, reduce `stage1_n` and/or `stage2_n` only after the
 final IRB design is decided. The material file can stay the same.
 
+## Ready-To-Launch Checklist
+
+Before recruiting participants, make sure these are configured:
+
+```text
+instruction_video_url   points to the final participant instruction video
+gsheet_url              points to the production Google Sheet
+randomization_salt      is private and not the README placeholder
+completion_salt         is private and not the README placeholder
+require_desktop         true for the formal experiment
+show_admin_controls     false or unset
+```
+
+The survey platform should show the instruction video and comprehension checks
+before sending participants to Streamlit. The same video URL can also be placed
+in `instruction_video_url`, where the Streamlit app displays it again before the
+practice trials.
+
 ## Required Runtime Files
 
-The app expects these files under `experiment_v2_edit/data/`:
+The app expects these files under `data/`:
 
 ```text
 materials_for_app_balanced_stage1.json
@@ -116,13 +145,13 @@ resolution.
 The app writes every event locally to:
 
 ```text
-experiment_v2_edit/logs/human_events.jsonl
+logs/human_events.jsonl
 ```
 
 If Google Sheet append fails after retries, the failed row is also saved to:
 
 ```text
-experiment_v2_edit/logs/human_events_unsynced.jsonl
+logs/human_events_unsynced.jsonl
 ```
 
 Main event types:
@@ -131,7 +160,8 @@ Main event types:
 stage1_passive_update
 stage2_active_query
 stage2_final_guess
-completion
+completion_valid
+completion_review
 ```
 
 Important quality-control fields include:
@@ -156,7 +186,39 @@ aha_suddenness
 aha_surprise
 completion_code
 completion_code_hash
+review_code
+quality_status
+quality_pass
+quality_flags
+quality_summary
+payment_eligible
+total_duration_sec
+stage1_valid_count
+stage1_timeout_count
+stage2_query_count
+stage2_final_count
+stage2_timeout_count
+empty_query_attempts
+duplicate_query_attempts
+no_feedback_query_attempts
+invalid_query_attempts
 ```
+
+## Completion-Code Gate
+
+At the final page, the app evaluates whether the session is complete and
+eligible for payment. The default checks require all formal Stage 1 and Stage 2
+trials to be completed, no Stage 2 timeout, limited invalid query attempts,
+desktop confirmation, and a minimum total duration.
+
+If the session passes, the app shows a formal `INS-*` completion code and logs
+`completion_valid` with `quality_pass = TRUE` and `payment_eligible = TRUE`.
+
+If the session needs review, the app does not show a formal completion code.
+Instead it shows a `REVIEW-*` code and logs `completion_review` with the
+reason(s) in `quality_flags`. Participants can paste the review code into the
+survey platform, but payment should be released only after checking the Google
+Sheet / event log.
 
 ## Participant-Facing Flow
 
@@ -170,7 +232,7 @@ intro / consent / desktop confirmation
   -> formal Stage 1 passive update
   -> formal Stage 2 query page
   -> formal Stage 2 answer + aha questionnaire page
-  -> completion code
+  -> completion or review code
 ```
 
 Stage 2 only shows participants their own query words and the 0-100 feedback
@@ -196,8 +258,8 @@ for repeated or suspicious submissions.
 ## Local Test
 
 ```bash
-cd /Users/qujianhui/Documents/Codex/2026-06-17/overleaf-tex-root-thuthesis-example-tex
-streamlit run experiment_v2_edit/human_app.py
+cd /Users/qujianhui/Documents/Codex/WAT-bayesian-app02
+streamlit run streamlit_app.py
 ```
 
 Test with URL parameters:
