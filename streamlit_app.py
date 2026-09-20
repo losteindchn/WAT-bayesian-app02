@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+from html import escape
 import json
 import random
 import time
@@ -15,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from common import GROUP_PROFILES, append_jsonl
 from feedback_resolver import load_grounding_config, load_semantic_grounding_index, resolve_query_feedback
@@ -32,7 +35,8 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.9-practice-query-limit"
+APP_VERSION = "human-two-stage-v3.0-required-video-gate"
+LOCAL_INSTRUCTION_VIDEO = APP_DIR / "assets" / "instruction_video.mov"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -523,6 +527,94 @@ def card(text: str) -> None:
     st.markdown(f'<div class="friendly-card">{text}</div>', unsafe_allow_html=True)
 
 
+@st.cache_data(show_spinner=False)
+def local_video_data_uri(path_text: str) -> str:
+    path = Path(path_text)
+    if not path.exists():
+        return ""
+    suffix = path.suffix.lower()
+    mime = "video/quicktime" if suffix == ".mov" else "video/mp4"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def instruction_video_source() -> str:
+    external_url = str(get_secret("instruction_video_url", "") or "").strip()
+    if external_url:
+        return external_url
+    return local_video_data_uri(str(LOCAL_INSTRUCTION_VIDEO))
+
+
+def render_required_video_gate(video_src: str) -> None:
+    safe_src = escape(video_src, quote=True)
+    components.html(
+        f"""
+        <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+          <video id="introVideo" width="100%" controls playsinline controlsList="nodownload noplaybackrate"
+                 style="border-radius: 10px; background: #000;">
+            <source src="{safe_src}">
+            你的浏览器不支持视频播放。
+          </video>
+
+          <div id="waitingMsg" style="
+              margin-top: 14px;
+              padding: 12px 14px;
+              border-left: 6px solid #f2994a;
+              background: #fff7ed;
+              border-radius: 8px;
+              font-size: 18px;
+              line-height: 1.5;">
+            请完整观看视频。视频播放结束后，才会出现继续按钮。
+          </div>
+
+          <button id="continueBtn" disabled style="
+              display: none;
+              margin-top: 18px;
+              padding: 10px 18px;
+              font-size: 18px;
+              border-radius: 8px;
+              border: 1px solid #2f80ed;
+              background: #2f80ed;
+              color: white;
+              cursor: pointer;">
+            我已看完说明视频，继续
+          </button>
+        </div>
+
+        <script>
+        const video = document.getElementById("introVideo");
+        const btn = document.getElementById("continueBtn");
+        const waiting = document.getElementById("waitingMsg");
+
+        function unlockContinue() {{
+            btn.disabled = false;
+            btn.style.display = "inline-block";
+            waiting.innerText = "视频已播放完毕。请点击下面按钮继续。";
+            waiting.style.borderLeftColor = "#2f80ed";
+            waiting.style.background = "#eef6ff";
+        }}
+
+        video.addEventListener("ended", unlockContinue);
+        video.addEventListener("timeupdate", function() {{
+            if (video.duration && video.currentTime >= video.duration - 0.25) {{
+                unlockContinue();
+            }}
+        }});
+
+        btn.addEventListener("click", function() {{
+            if (!btn.disabled) {{
+                const url = new URL(window.parent.location.href);
+                url.searchParams.set("video_done", "1");
+                window.parent.location.href = url.toString();
+            }}
+        }});
+        </script>
+        """,
+        height=760,
+        scrolling=False,
+    )
+
+
 def clean_query_word(text: Any) -> str:
     return str(text or "").strip()
 
@@ -660,10 +752,18 @@ init_state()
 
 if st.session_state.page == "intro":
     st.title("文字谜题联想实验")
-    video_url = str(get_secret("instruction_video_url", "") or "").strip()
-    if video_url:
+    video_src = instruction_video_source()
+    video_done = query_param("video_done", default="") == "1"
+    require_instruction_video = bool_secret("require_instruction_video", True)
+    if video_src and require_instruction_video and not video_done:
+        note("请先完整观看下面的讲解视频。视频播放结束前，不能进入下一步。")
+        render_required_video_gate(video_src)
+        st.stop()
+    if video_src and not require_instruction_video:
         note("请先看完下面的讲解视频。视频会演示每一步怎么操作。看完后，再填写页面下方的信息。")
-        st.video(video_url)
+        st.video(video_src)
+    elif video_src and video_done:
+        note("说明视频已完成。请继续填写页面下方的信息。")
     else:
         note("这个实验会先带你做两个练习。请按页面提示一步一步完成。")
     st.caption("你的回答将匿名用于科研分析；你可以随时停止实验。")
@@ -784,10 +884,10 @@ if st.session_state.page == "intro":
 
 elif st.session_state.page == "training":
     st.title("正式开始前，请记住三件事")
-    video_url = str(get_secret("instruction_video_url", "") or "").strip()
-    if video_url:
+    video_src = instruction_video_source()
+    if video_src:
         with st.expander("如果需要，可以重新观看讲解视频"):
-            st.video(video_url)
+            st.video(video_src)
     card("<b>1. 不要搜索答案，也不要和别人讨论。</b><br>请只根据你自己的想法作答。")
     card("<b>2. 第一部分：先看一个起始提示词，再看一个新增提示词。</b><br>你要判断“起始提示词”和答案有多相关。看到新增提示词和分数后，再判断一次。")
     card("<b>3. 第二部分：自己输入想查的词。</b><br>系统会告诉你这个词和答案有多接近。分数越高，越接近答案。")
