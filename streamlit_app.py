@@ -32,7 +32,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.6-quality-gated-code"
+APP_VERSION = "human-two-stage-v2.7-participant-friendly"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -60,6 +60,70 @@ DEFAULT_STAGE1_ITEM_IDS_20 = [
 
 
 st.set_page_config(page_title="文字谜题联想实验", layout="centered")
+
+st.markdown(
+    """
+<style>
+section.main > div.block-container {
+    max-width: 920px;
+    padding-top: 2.2rem;
+}
+html, body, [class*="css"] {
+    font-size: 20px;
+}
+h1 {
+    font-size: 3.05rem !important;
+    line-height: 1.18 !important;
+    margin-bottom: 1.2rem !important;
+}
+h2, h3 {
+    line-height: 1.3 !important;
+}
+p, li, label, .stMarkdown, .stCaption {
+    line-height: 1.75 !important;
+}
+div[data-testid="stCaptionContainer"] {
+    font-size: 1rem !important;
+}
+div.stButton > button {
+    font-size: 1.15rem;
+    padding: 0.55rem 1.05rem;
+}
+.friendly-note {
+    border-left: 7px solid #2f80ed;
+    background: #eef6ff;
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    margin: 1rem 0;
+    font-size: 1.08rem;
+    line-height: 1.7;
+}
+.friendly-warning {
+    border-left: 7px solid #f2994a;
+    background: #fff7ed;
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    margin: 1rem 0;
+    font-size: 1.08rem;
+    line-height: 1.7;
+}
+.friendly-card {
+    background: #f7f8fb;
+    border: 1px solid #e4e7ee;
+    border-radius: 12px;
+    padding: 1rem 1.15rem;
+    margin: 0.9rem 0;
+    font-size: 1.05rem;
+    line-height: 1.7;
+}
+.big-word {
+    font-size: 1.35rem;
+    font-weight: 700;
+}
+</style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 SHEET_COLUMNS = [
@@ -438,11 +502,23 @@ def is_timed_out(limit_sec: int) -> bool:
 def show_time_rule(limit_sec: int) -> None:
     if limit_sec and limit_sec > 0:
         minutes = max(1, round(limit_sec / 60))
-        st.caption(f"本页作答时间上限约 {minutes} 分钟；超时后再提交将被记录为本轮无效。")
+        st.caption(f"本页最多约 {minutes} 分钟。请看懂后及时作答。")
 
 
 def rating_slider(label: str, key: str) -> int:
-    return st.slider(f"{label}（0=完全没有，100=非常强；请拖动滑块选择）", 0, 100, 50, key=key)
+    return st.slider(f"{label}（0=完全没有，100=非常强）", 0, 100, 50, key=key)
+
+
+def note(text: str) -> None:
+    st.markdown(f'<div class="friendly-note">{text}</div>', unsafe_allow_html=True)
+
+
+def warning_note(text: str) -> None:
+    st.markdown(f'<div class="friendly-warning">{text}</div>', unsafe_allow_html=True)
+
+
+def card(text: str) -> None:
+    st.markdown(f'<div class="friendly-card">{text}</div>', unsafe_allow_html=True)
 
 
 def clean_query_word(text: Any) -> str:
@@ -582,8 +658,13 @@ init_state()
 
 if st.session_state.page == "intro":
     st.title("文字谜题联想实验")
-    st.write("本实验包含两个部分：先根据提示更新判断，再主动查询线索。")
-    st.caption("你的回答将匿名用于科研分析；你可以随时停止参与。")
+    video_url = str(get_secret("instruction_video_url", "") or "").strip()
+    if video_url:
+        note("请先看完下面的讲解视频。视频会演示每一步怎么操作。看完后，再填写页面下方的信息。")
+        st.video(video_url)
+    else:
+        note("这个实验会先带你做两个练习。请按页面提示一步一步完成。")
+    st.caption("你的回答将匿名用于科研分析；你可以随时停止实验。")
 
     pid_from_url = query_param("pid", "participant_id", "participantId", "uid", "id")
     platform_pid = query_param("platform_pid", "external_id", "respondent_id", "wjx_id", "credamo_id", default=pid_from_url)
@@ -592,19 +673,25 @@ if st.session_state.page == "intro":
     group_from_url = query_param("group", default="").upper()
     return_url = query_param("return_url", "redirect", default="")
 
-    pid = st.text_input("参与者 ID", value=pid_from_url)
-    default_group_idx = list(GROUP_PROFILES.keys()).index(group_from_url) if group_from_url in GROUP_PROFILES else 0
-    group_choice = st.selectbox("分组（若 ID 中包含 FH/FN/MH/MN，将自动使用 ID 中的分组）", list(GROUP_PROFILES.keys()), index=default_group_idx)
+    st.subheader("开始前，请填写基本信息")
+    pid = st.text_input("受试者编号", value=pid_from_url, help="请填写问卷平台或研究人员提供的编号。")
+    default_group = group_from_url if group_from_url in GROUP_PROFILES else str(get_secret("default_group", "FH")).upper()
+    if default_group not in GROUP_PROFILES:
+        default_group = "FH"
+    default_group_idx = list(GROUP_PROFILES.keys()).index(default_group)
+    if bool_secret("show_group_selector", False) or bool_secret("show_admin_controls", False):
+        group_choice = st.selectbox("实验分组（请保持默认选项）", list(GROUP_PROFILES.keys()), index=default_group_idx)
+    else:
+        group_choice = default_group
     age = st.number_input("年龄", min_value=10, max_value=99, value=20)
     native_chinese = st.selectbox("中文熟练程度", ["母语/近似母语", "熟练", "一般"])
     require_desktop = bool_secret("require_desktop", True)
     desktop_confirmed = st.checkbox("我正在使用电脑或笔记本电脑完成实验。")
     if require_desktop:
-        st.caption("正式实验只接受电脑或笔记本作答；手机屏幕会改变阅读、输入和查询体验，可能导致数据无效。")
+        st.caption("请不要用手机作答。手机屏幕会影响阅读、输入和查询。")
     else:
         st.caption("当前允许非电脑设备进入，但设备信息会用于后续数据质量审核。")
     consent = st.checkbox("我已了解实验说明，并自愿参加。")
-    st.caption(f"招募来源：{platform_source}；实验条件：{condition}")
 
     stage1_n_limit = int_secret("stage1_n_max", len(DEFAULT_STAGE1_ITEM_IDS_20))
     stage1_n = min(int_secret("stage1_n", len(DEFAULT_STAGE1_ITEM_IDS_20)), stage1_n_limit)
@@ -626,7 +713,7 @@ if st.session_state.page == "intro":
             stage1_update_timeout_sec = st.number_input("Stage 1 更新判断时间上限（秒）", min_value=0, max_value=max(0, stage1_timeout_limit), value=stage1_update_timeout_sec)
             stage2_query_timeout_sec = st.number_input("Stage 2 查询页时间上限（秒）", min_value=0, max_value=3600, value=stage2_query_timeout_sec)
             stage2_answer_timeout_sec = st.number_input("Stage 2 答案页时间上限（秒）", min_value=0, max_value=3600, value=stage2_answer_timeout_sec)
-    st.caption(f"预计第一部分 {stage1_n} 题；第二部分 {stage2_n} 题，每题查询 {min_queries}-{max_queries} 次。")
+    card("点击开始后，你会先完成两个练习题。练习题不计入正式数据。")
 
     if get_secret("gsheet_url") is None:
         st.warning("当前为本地测试模式：未配置 Google Sheet secrets。")
@@ -634,7 +721,7 @@ if st.session_state.page == "intro":
     if st.button("开始"):
         group = infer_group(pid, group_choice)
         if not pid.strip() or not group or not consent or (require_desktop and not desktop_confirmed):
-            st.warning("请输入参与者 ID、确认分组，并确认知情同意和电脑端作答。")
+            st.warning("请填写受试者编号，并勾选电脑作答和知情同意。")
             st.stop()
         if int(min_queries) > int(max_queries):
             st.warning("最少查询次数不能大于最多查询次数。")
@@ -694,23 +781,16 @@ if st.session_state.page == "intro":
 
 
 elif st.session_state.page == "training":
-    st.title("实验规则说明")
+    st.title("正式开始前，请记住三件事")
     video_url = str(get_secret("instruction_video_url", "") or "").strip()
     if video_url:
-        st.video(video_url)
-    st.markdown(
-        """
-你要完成的是一个文字谜题联想任务。请不要直接搜索答案，也不要和别人讨论。
-
-**第一部分**：你会看到谜面和一个“初始线索词”。请先判断“初始线索词”和“谜底或关键机制”有多相关。随后系统给出另一个“提示词”，以及“提示词”和“真实答案”的关联分数。这个分数不是初始线索词的分数；你的任务是根据提示词和分数，更新你对初始线索词的判断。
-
-**第二部分**：你会看到新的谜题。你不能立刻填写答案，而是先输入若干个想查询的词。系统只返回“你查询的词”和“真实答案”的关联分数。分数越高，说明你查询的词越接近真实答案。你觉得已经知道答案后，再进入答案页填写解释和体验问卷。
-
-所有滑块都是 0-100 分，请拖动圆点选择；不要只使用默认 50。
-        """
-    )
-    st.info("正式题目有时间上限。超时提交会被记录为本轮无效，所以请在理解题目后及时作答。")
-    if st.button("进入练习 1：判断更新"):
+        with st.expander("如果需要，可以重新观看讲解视频"):
+            st.video(video_url)
+    card("<b>1. 不要搜索答案，也不要和别人讨论。</b><br>请只根据你自己的想法作答。")
+    card("<b>2. 第一部分：先看一个词，再看一个新提示。</b><br>你要判断“第一个词”和答案有多相关。看到新提示和分数后，再判断一次。")
+    card("<b>3. 第二部分：自己输入想查的词。</b><br>系统会告诉你这个词和答案有多接近。分数越高，越接近答案。")
+    warning_note("所有滑块都是 0-100 分。请拖动滑块，不要一直使用默认的 50。")
+    if st.button("进入练习 1"):
         st.session_state.page = "practice_stage1"
         st.session_state.practice1_phase = "prior"
         reset_screen_timer()
@@ -718,25 +798,26 @@ elif st.session_state.page == "training":
 
 
 elif st.session_state.page == "practice_stage1":
-    st.title("练习 1：如何使用滑块更新判断")
+    st.title("练习 1：看完新提示后，再判断一次")
     st.caption("这是练习题，不记录为正式数据。")
     st.subheader("练习题：雨中的门口")
     st.write("一个人站在门口，外面正在下雨。他看了一眼手里的东西，突然决定不出门了。")
-    st.markdown("初始线索词：**雨伞**")
+    st.markdown('<span class="big-word">第一个词：雨伞</span>', unsafe_allow_html=True)
     if st.session_state.practice1_phase == "prior":
-        rating_slider("你认为这个线索词与谜底或关键机制相关的可能性", "practice_prior")
+        note("这一步只做一件事：先判断“雨伞”和答案有多相关。")
+        rating_slider("现在看，你觉得“雨伞”和答案有多相关？", "practice_prior")
         st.caption("请拖动滑块。0 表示完全无关，100 表示非常相关。")
-        if st.button("查看练习提示"):
+        if st.button("下一步：查看新提示"):
             st.session_state.practice1_phase = "update"
             reset_screen_timer()
             st.rerun()
     else:
-        st.info("下面的分数表示：提示词“钥匙”与真实答案之间的语义关联强度；它不是初始线索词“雨伞”的分数。")
-        st.markdown("提示词：**钥匙**")
-        st.markdown("提示词-答案关联分数：**82 / 100**")
-        rating_slider("看到提示词和分数后，你现在认为初始线索词“雨伞”与谜底或关键机制相关的可能性", "practice_updated")
-        rating_slider("你对这个更新后判断的信心", "practice_conf")
-        if st.button("进入练习 2：主动查询"):
+        warning_note("重要：82 分是“钥匙”和答案的接近程度，不是“雨伞”的分数。请用这个新信息，再判断一次“雨伞”。")
+        st.markdown('<span class="big-word">新提示：钥匙</span>', unsafe_allow_html=True)
+        st.markdown('<span class="big-word">新提示和答案的接近程度：82 / 100</span>', unsafe_allow_html=True)
+        rating_slider("看过“钥匙 82分”后，你觉得“雨伞”和答案有多相关？", "practice_updated")
+        rating_slider("你对这次判断有多确定？", "practice_conf")
+        if st.button("进入练习 2"):
             st.session_state.page = "practice_stage2"
             st.session_state.practice2_history = []
             reset_screen_timer()
@@ -744,18 +825,19 @@ elif st.session_state.page == "practice_stage1":
 
 
 elif st.session_state.page == "practice_stage2":
-    st.title("练习 2：如何主动查询")
+    st.title("练习 2：自己输入想查的词")
     st.caption("这是练习题，不记录为正式数据。")
     st.subheader("练习题：打不开的门")
     st.write("一个人回到家门口，却没有立刻进门。他在口袋里找了很久，然后笑了。")
+    note("这一步只做一件事：输入一个你想查的词，看看它和答案有多接近。")
     practice_scores = {"钥匙": 90, "门": 72, "口袋": 61, "手机": 21, "蛋糕": 5}
     history = st.session_state.practice2_history
     if history:
         st.write("练习查询结果：")
         st.table(pd.DataFrame(history))
-    q = st.text_input("输入一个你想查询的词，例如：钥匙、门、手机", key="practice_query")
-    st.caption("同一道题中不要重复查询同一个词；重复输入不会计入查询次数。")
-    if st.button("查询练习词"):
+    q = st.text_input("想查的词", key="practice_query", help="例如：钥匙、门、手机。一次只输入一个词。")
+    st.caption("请换用新的词；同一个词不要重复查。")
+    if st.button("查询这个词"):
         query_clean = clean_query_word(q)
         score = practice_scores.get(query_clean, 30 if query_clean else 0)
         if not query_clean:
@@ -763,11 +845,11 @@ elif st.session_state.page == "practice_stage2":
         elif query_already_used(history, query_raw=query_clean):
             st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
         else:
-            history.append({"第几次": len(history) + 1, "查询词": query_clean, "查询词-答案关联分数": f"{score} / 100"})
+            history.append({"第几次": len(history) + 1, "你查的词": query_clean, "这个词和答案的接近程度": f"{score} / 100"})
             st.session_state.practice2_history = history
             st.rerun()
-    st.caption("正式实验中，每道题至少查询指定次数；达到次数后会出现“我知道答案了”按钮。")
-    if len(history) >= 1 and st.button("我已理解，进入第一部分正式实验"):
+    st.caption("正式实验中，每道题要先查询几次；查够后会出现进入答案页的按钮。")
+    if len(history) >= 1 and st.button("我已理解，开始正式实验"):
         reset_formal_quality_state()
         st.session_state.page = "stage1"
         reset_screen_timer()
@@ -788,13 +870,14 @@ elif st.session_state.page == "stage1":
     show_progress("第一部分", idx, len(st.session_state.order_stage1))
     st.subheader(item.get("title") or f"题目 {idx + 1}")
     st.write(item["riddle_text"])
-    st.markdown(f"初始线索词：**{fb['anchor_word']}**")
+    st.markdown(f'<span class="big-word">第一个词：{fb["anchor_word"]}</span>', unsafe_allow_html=True)
 
     if st.session_state.stage1_phase == "prior":
         prior_limit = int(st.session_state.get("stage1_prior_timeout_sec", 0))
         show_time_rule(prior_limit)
-        prior = rating_slider("你认为这个线索词与谜底或关键机制相关的可能性", f"prior_{item_id}")
-        if st.button("查看提示", key=f"show_{item_id}"):
+        note("这页只做一件事：先判断“第一个词”和答案有多相关。")
+        prior = rating_slider(f"现在看，你觉得“{fb['anchor_word']}”和答案有多相关？", f"prior_{item_id}")
+        if st.button("下一步：查看新提示", key=f"show_{item_id}"):
             if is_timed_out(prior_limit):
                 event = {
                     "participant_id": st.session_state.pid,
@@ -823,12 +906,12 @@ elif st.session_state.page == "stage1":
     else:
         update_limit = int(st.session_state.get("stage1_update_timeout_sec", 0))
         show_time_rule(update_limit)
-        st.info(f"下面的分数表示：提示词“{fb['cue_word']}”与真实答案之间的语义关联强度；它不是初始线索词“{fb['anchor_word']}”的分数。")
-        st.markdown(f"提示词：**{fb['cue_word']}**")
-        st.markdown(f"提示词-答案关联分数：**{fb['target_cue_score']} / 100**")
-        updated = rating_slider(f"看到提示词和分数后，你现在认为初始线索词“{fb['anchor_word']}”与谜底或关键机制相关的可能性", f"updated_{item_id}")
-        confidence = rating_slider("你对这个更新后判断的信心", f"conf_{item_id}")
-        if st.button("提交本题", key=f"submit_stage1_{item_id}"):
+        warning_note(f"重要：{fb['target_cue_score']} 分是“{fb['cue_word']}”和答案的接近程度，不是“{fb['anchor_word']}”的分数。请用这个新信息，再判断一次“{fb['anchor_word']}”。")
+        st.markdown(f'<span class="big-word">新提示：{fb["cue_word"]}</span>', unsafe_allow_html=True)
+        st.markdown(f'<span class="big-word">新提示和答案的接近程度：{fb["target_cue_score"]} / 100</span>', unsafe_allow_html=True)
+        updated = rating_slider(f"看过“{fb['cue_word']} {fb['target_cue_score']}分”后，你觉得“{fb['anchor_word']}”和答案有多相关？", f"updated_{item_id}")
+        confidence = rating_slider("你对这次判断有多确定？", f"conf_{item_id}")
+        if st.button("提交，进入下一题", key=f"submit_stage1_{item_id}"):
             timeout = is_timed_out(update_limit)
             event = {
                     "participant_id": st.session_state.pid,
@@ -855,10 +938,10 @@ elif st.session_state.page == "stage1":
 
 
 elif st.session_state.page == "stage2_intro":
-    st.title("第二部分：主动探索")
-    st.write("你可以输入词语来查询它与真实答案的关联强度。系统只会显示“你查询的词”和“真实答案”的 0-100 关联分数。")
-    st.write("请先通过查询词逐步探索，不要一开始就填写答案。达到最少查询次数后，如果你觉得知道答案了，可以进入答案页。")
-    st.write("同一道题中不要重复查询同一个词；重复输入不会计入查询次数。")
+    st.title("第二部分：自己查词")
+    card("你会看到新的谜题。先不要写答案。")
+    card("你要输入自己想查的词。系统会告诉你：这个词和答案有多接近。")
+    card("分数越高，表示这个词越接近答案。同一道题不要重复查同一个词。")
     st.caption(f"每题至少查询 {st.session_state.get('min_queries', 0)} 次，最多查询 {st.session_state.max_queries} 次。")
     if st.button("进入第二部分"):
         st.session_state.page = "stage2"
@@ -892,17 +975,17 @@ elif st.session_state.page == "stage2":
         show_time_rule(query_limit)
         if history:
             visible_history = [
-                {"第几次": h["query_index"], "查询词": h["query_raw"], "查询词-答案关联分数": f"{h['score']} / 100"}
+                {"第几次": h["query_index"], "你查的词": h["query_raw"], "这个词和答案的接近程度": f"{h['score']} / 100"}
                 for h in history
             ]
             st.write("已查询结果：")
             st.table(pd.DataFrame(visible_history))
 
-        st.caption(f"已查询 {len(history)} / {st.session_state.max_queries} 次；至少 {min_queries} 次后可以进入答案页。")
+        note(f"这页只做一件事：输入一个想查的词。已查询 {len(history)} 次；至少 {min_queries} 次后可以进入答案页。")
         if len(history) < st.session_state.max_queries:
-            query = st.text_input("输入一个你想查询的词", key=f"query_{item_id}_{len(history)}")
-            st.caption("请换用新的查询词；已经查询过的词不会重复计数。")
-            if st.button("查询", key=f"do_query_{item_id}_{len(history)}"):
+            query = st.text_input("想查的词", key=f"query_{item_id}_{len(history)}", help="一次只输入一个常见词，不要输入一句话。")
+            st.caption("请换用新的词；已经查过的词不会重复计数。")
+            if st.button("查询这个词", key=f"do_query_{item_id}_{len(history)}"):
                 if is_timed_out(query_limit):
                     event = {
                         "participant_id": st.session_state.pid,
@@ -980,7 +1063,7 @@ elif st.session_state.page == "stage2":
 
         can_answer = len(history) >= min_queries
         if can_answer:
-            if st.button("我知道答案了，进入答案页", key=f"know_{item_id}"):
+            if st.button("我知道答案了，去填写答案", key=f"know_{item_id}"):
                 st.session_state.stage2_phase = "answer"
                 reset_screen_timer()
                 st.rerun()
@@ -991,17 +1074,18 @@ elif st.session_state.page == "stage2":
         show_time_rule(answer_limit)
         if history:
             visible_history = [
-                {"第几次": h["query_index"], "查询词": h["query_raw"], "查询词-答案关联分数": f"{h['score']} / 100"}
+                {"第几次": h["query_index"], "你查的词": h["query_raw"], "这个词和答案的接近程度": f"{h['score']} / 100"}
                 for h in history
             ]
             st.write("你的查询结果：")
             st.table(pd.DataFrame(visible_history))
-        guess = st.text_area("请写下你的最终答案/解释", key=f"guess_{item_id}")
+        note("请根据题目和你查到的分数，写出你认为的答案或解释。")
+        guess = st.text_area("你的答案或解释", key=f"guess_{item_id}")
         aha = rating_slider("你是否有突然明白的感觉", f"aha_{item_id}")
         aha_suddenness = rating_slider("这个想法出现得有多突然", f"aha_sudden_{item_id}")
         aha_surprise = rating_slider("这个答案让你有多惊讶", f"aha_surprise_{item_id}")
-        confidence = rating_slider("你对最终答案的信心", f"final_conf_{item_id}")
-        known_story = st.radio("你之前是否知道这个谜题或答案？", ["否", "不确定", "是"], horizontal=True, key=f"known_{item_id}")
+        confidence = rating_slider("你对这个答案有多确定？", f"final_conf_{item_id}")
+        known_story = st.radio("你以前是否看过这个谜题或知道答案？", ["否", "不确定", "是"], horizontal=True, key=f"known_{item_id}")
         if st.button("提交并进入下一题", key=f"finish_{item_id}"):
             timeout = is_timed_out(answer_limit)
             event = {
@@ -1095,7 +1179,7 @@ elif st.session_state.page == "done":
                 "invalid_query_attempts": st.session_state.get("invalid_query_attempts", ""),
             }
         )
-    st.success("实验完成，感谢参与。")
+    st.success("实验完成，感谢你完成本次任务。")
     if st.session_state.get("quality_pass"):
         st.subheader("完成码")
         st.code(st.session_state.completion_code)
