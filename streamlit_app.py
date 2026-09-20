@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 from html import escape
 import json
@@ -35,8 +34,8 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v3.0-required-video-gate"
-LOCAL_INSTRUCTION_VIDEO = APP_DIR / "assets" / "instruction_video.mov"
+APP_VERSION = "human-two-stage-v3.1-static-video-gate"
+STATIC_INSTRUCTION_VIDEO_URL = "/app/static/instruction_video.mov"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -527,22 +526,11 @@ def card(text: str) -> None:
     st.markdown(f'<div class="friendly-card">{text}</div>', unsafe_allow_html=True)
 
 
-@st.cache_data(show_spinner=False)
-def local_video_data_uri(path_text: str) -> str:
-    path = Path(path_text)
-    if not path.exists():
-        return ""
-    suffix = path.suffix.lower()
-    mime = "video/quicktime" if suffix == ".mov" else "video/mp4"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{encoded}"
-
-
 def instruction_video_source() -> str:
     external_url = str(get_secret("instruction_video_url", "") or "").strip()
     if external_url:
         return external_url
-    return local_video_data_uri(str(LOCAL_INSTRUCTION_VIDEO))
+    return STATIC_INSTRUCTION_VIDEO_URL
 
 
 def render_required_video_gate(video_src: str) -> None:
@@ -550,11 +538,19 @@ def render_required_video_gate(video_src: str) -> None:
     components.html(
         f"""
         <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
-          <video id="introVideo" width="100%" controls playsinline controlsList="nodownload noplaybackrate"
+          <video id="introVideo" width="100%" controls playsinline preload="metadata" controlsList="nodownload noplaybackrate"
                  style="border-radius: 10px; background: #000;">
             <source src="{safe_src}">
             你的浏览器不支持视频播放。
           </video>
+
+          <div id="loadMsg" style="
+              margin-top: 10px;
+              color: #666;
+              font-size: 15px;
+              line-height: 1.4;">
+            正在加载视频。若播放按钮暂时不可用，请等待片刻。
+          </div>
 
           <div id="waitingMsg" style="
               margin-top: 14px;
@@ -585,6 +581,7 @@ def render_required_video_gate(video_src: str) -> None:
         const video = document.getElementById("introVideo");
         const btn = document.getElementById("continueBtn");
         const waiting = document.getElementById("waitingMsg");
+        const loadMsg = document.getElementById("loadMsg");
 
         function unlockContinue() {{
             btn.disabled = false;
@@ -593,6 +590,27 @@ def render_required_video_gate(video_src: str) -> None:
             waiting.style.borderLeftColor = "#2f80ed";
             waiting.style.background = "#eef6ff";
         }}
+
+        video.addEventListener("loadedmetadata", function() {{
+            if (video.duration) {{
+                const minutes = Math.floor(video.duration / 60);
+                const seconds = Math.round(video.duration % 60).toString().padStart(2, "0");
+                loadMsg.innerText = "视频已加载，可以播放。视频时长约 " + minutes + ":" + seconds + "。";
+            }} else {{
+                loadMsg.innerText = "视频已加载，可以播放。";
+            }}
+        }});
+
+        video.addEventListener("canplay", function() {{
+            loadMsg.innerText = loadMsg.innerText || "视频已加载，可以播放。";
+        }});
+
+        video.addEventListener("error", function() {{
+            loadMsg.innerText = "视频加载失败或当前浏览器不能播放此格式。请联系研究人员。";
+            waiting.innerText = "当前视频格式可能不兼容。研究人员需要将视频转换为 MP4 后重新发布。";
+            waiting.style.borderLeftColor = "#d93025";
+            waiting.style.background = "#fff1f0";
+        }});
 
         video.addEventListener("ended", unlockContinue);
         video.addEventListener("timeupdate", function() {{
