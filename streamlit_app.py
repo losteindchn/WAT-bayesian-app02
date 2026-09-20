@@ -34,8 +34,8 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v3.1-static-video-gate"
-STATIC_INSTRUCTION_VIDEO_URL = "/app/static/instruction_video.mov"
+APP_VERSION = "human-two-stage-v3.2-static-mp4-video-gate"
+STATIC_INSTRUCTION_VIDEO_URL = "/app/static/instruction_video.mp4"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
