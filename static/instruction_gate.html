@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      color: #262730;
+    }
+
+    .video-wrap {
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    video {
+      width: 100%;
+      border-radius: 10px;
+      background: #000;
+      display: block;
+    }
+
+    .load-msg {
+      margin-top: 10px;
+      color: #666;
+      font-size: 15px;
+      line-height: 1.4;
+    }
+
+    .status {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-left: 6px solid #f2994a;
+      background: #fff7ed;
+      border-radius: 8px;
+      font-size: 18px;
+      line-height: 1.5;
+    }
+
+    .status.ready {
+      border-left-color: #2f80ed;
+      background: #eef6ff;
+    }
+
+    .status.error {
+      border-left-color: #d93025;
+      background: #fff1f0;
+    }
+
+    button {
+      display: none;
+      margin-top: 18px;
+      padding: 10px 18px;
+      font-size: 18px;
+      border-radius: 8px;
+      border: 1px solid #2f80ed;
+      background: #2f80ed;
+      color: white;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+  </style>
+</head>
+<body>
+  <div class="video-wrap">
+    <video id="introVideo" controls playsinline preload="metadata" controlsList="nodownload noplaybackrate">
+      你的浏览器不支持视频播放。
+    </video>
+
+    <div id="loadMsg" class="load-msg">正在加载视频。若播放按钮暂时不可用，请等待片刻。</div>
+    <div id="statusMsg" class="status">请完整观看视频。视频播放结束后，才会出现继续按钮。</div>
+    <button id="continueBtn" type="button" disabled>我已看完说明视频，继续</button>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const videoSrc = params.get("video") || "instruction_video.mp4";
+    const video = document.getElementById("introVideo");
+    const btn = document.getElementById("continueBtn");
+    const statusMsg = document.getElementById("statusMsg");
+    const loadMsg = document.getElementById("loadMsg");
+
+    let maxWatched = 0;
+    let lastAllowedTime = 0;
+    let unlocked = false;
+
+    video.src = videoSrc;
+
+    function formatDuration(duration) {
+      const minutes = Math.floor(duration / 60);
+      const seconds = Math.round(duration % 60).toString().padStart(2, "0");
+      return minutes + ":" + seconds;
+    }
+
+    function unlockContinue() {
+      if (unlocked) return;
+      unlocked = true;
+      btn.disabled = false;
+      btn.style.display = "inline-block";
+      statusMsg.innerText = "视频已播放完毕。请点击下面按钮继续。";
+      statusMsg.classList.add("ready");
+    }
+
+    video.addEventListener("loadedmetadata", function() {
+      if (video.duration) {
+        loadMsg.innerText = "视频已加载，可以播放。视频时长约 " + formatDuration(video.duration) + "。";
+      } else {
+        loadMsg.innerText = "视频已加载，可以播放。";
+      }
+    });
+
+    video.addEventListener("canplay", function() {
+      if (!loadMsg.innerText || loadMsg.innerText.indexOf("正在加载") >= 0) {
+        loadMsg.innerText = "视频已加载，可以播放。";
+      }
+    });
+
+    video.addEventListener("timeupdate", function() {
+      if (!video.seeking) {
+        maxWatched = Math.max(maxWatched, video.currentTime);
+        lastAllowedTime = video.currentTime;
+      }
+      if (video.duration && maxWatched >= video.duration - 0.25) {
+        unlockContinue();
+      }
+    });
+
+    video.addEventListener("seeking", function() {
+      if (video.currentTime > maxWatched + 1.5) {
+        video.currentTime = lastAllowedTime;
+      }
+    });
+
+    video.addEventListener("ended", function() {
+      maxWatched = video.duration || maxWatched;
+      unlockContinue();
+    });
+
+    video.addEventListener("error", function() {
+      loadMsg.innerText = "视频加载失败或当前浏览器不能播放此格式。请联系研究人员。";
+      statusMsg.innerText = "当前视频格式可能不兼容。研究人员需要重新发布视频。";
+      statusMsg.classList.add("error");
+    });
+
+    btn.addEventListener("click", function() {
+      if (btn.disabled) return;
+      const url = new URL(window.parent.location.href);
+      url.searchParams.set("video_done", "1");
+      window.parent.location.href = url.toString();
+    });
+  </script>
+</body>
+</html>

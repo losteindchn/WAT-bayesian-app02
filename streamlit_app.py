@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import hashlib
-from html import escape
 import json
 import random
 import time
@@ -16,7 +15,6 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from common import GROUP_PROFILES, append_jsonl
 from feedback_resolver import load_grounding_config, load_semantic_grounding_index, resolve_query_feedback
@@ -34,8 +32,9 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v3.2-static-mp4-video-gate"
+APP_VERSION = "human-two-stage-v3.3-static-iframe-video-gate"
 STATIC_INSTRUCTION_VIDEO_URL = "/app/static/instruction_video.mp4"
+STATIC_INSTRUCTION_GATE_URL = "/app/static/instruction_gate.html"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -534,103 +533,8 @@ def instruction_video_source() -> str:
 
 
 def render_required_video_gate(video_src: str) -> None:
-    safe_src = escape(video_src, quote=True)
-    components.html(
-        f"""
-        <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
-          <video id="introVideo" width="100%" controls playsinline preload="metadata" controlsList="nodownload noplaybackrate"
-                 style="border-radius: 10px; background: #000;">
-            <source src="{safe_src}">
-            你的浏览器不支持视频播放。
-          </video>
-
-          <div id="loadMsg" style="
-              margin-top: 10px;
-              color: #666;
-              font-size: 15px;
-              line-height: 1.4;">
-            正在加载视频。若播放按钮暂时不可用，请等待片刻。
-          </div>
-
-          <div id="waitingMsg" style="
-              margin-top: 14px;
-              padding: 12px 14px;
-              border-left: 6px solid #f2994a;
-              background: #fff7ed;
-              border-radius: 8px;
-              font-size: 18px;
-              line-height: 1.5;">
-            请完整观看视频。视频播放结束后，才会出现继续按钮。
-          </div>
-
-          <button id="continueBtn" disabled style="
-              display: none;
-              margin-top: 18px;
-              padding: 10px 18px;
-              font-size: 18px;
-              border-radius: 8px;
-              border: 1px solid #2f80ed;
-              background: #2f80ed;
-              color: white;
-              cursor: pointer;">
-            我已看完说明视频，继续
-          </button>
-        </div>
-
-        <script>
-        const video = document.getElementById("introVideo");
-        const btn = document.getElementById("continueBtn");
-        const waiting = document.getElementById("waitingMsg");
-        const loadMsg = document.getElementById("loadMsg");
-
-        function unlockContinue() {{
-            btn.disabled = false;
-            btn.style.display = "inline-block";
-            waiting.innerText = "视频已播放完毕。请点击下面按钮继续。";
-            waiting.style.borderLeftColor = "#2f80ed";
-            waiting.style.background = "#eef6ff";
-        }}
-
-        video.addEventListener("loadedmetadata", function() {{
-            if (video.duration) {{
-                const minutes = Math.floor(video.duration / 60);
-                const seconds = Math.round(video.duration % 60).toString().padStart(2, "0");
-                loadMsg.innerText = "视频已加载，可以播放。视频时长约 " + minutes + ":" + seconds + "。";
-            }} else {{
-                loadMsg.innerText = "视频已加载，可以播放。";
-            }}
-        }});
-
-        video.addEventListener("canplay", function() {{
-            loadMsg.innerText = loadMsg.innerText || "视频已加载，可以播放。";
-        }});
-
-        video.addEventListener("error", function() {{
-            loadMsg.innerText = "视频加载失败或当前浏览器不能播放此格式。请联系研究人员。";
-            waiting.innerText = "当前视频格式可能不兼容。研究人员需要将视频转换为 MP4 后重新发布。";
-            waiting.style.borderLeftColor = "#d93025";
-            waiting.style.background = "#fff1f0";
-        }});
-
-        video.addEventListener("ended", unlockContinue);
-        video.addEventListener("timeupdate", function() {{
-            if (video.duration && video.currentTime >= video.duration - 0.25) {{
-                unlockContinue();
-            }}
-        }});
-
-        btn.addEventListener("click", function() {{
-            if (!btn.disabled) {{
-                const url = new URL(window.parent.location.href);
-                url.searchParams.set("video_done", "1");
-                window.parent.location.href = url.toString();
-            }}
-        }});
-        </script>
-        """,
-        height=760,
-        scrolling=False,
-    )
+    gate_src = f"{STATIC_INSTRUCTION_GATE_URL}?{urlencode({'video': video_src})}"
+    st.iframe(gate_src, height=760)
 
 
 def clean_query_word(text: Any) -> str:
