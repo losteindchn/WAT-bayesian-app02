@@ -32,7 +32,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.7-participant-friendly"
+APP_VERSION = "human-two-stage-v2.8-wider-guided-flow"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -59,65 +59,67 @@ DEFAULT_STAGE1_ITEM_IDS_20 = [
 ]
 
 
-st.set_page_config(page_title="文字谜题联想实验", layout="centered")
+st.set_page_config(page_title="文字谜题联想实验", layout="wide")
 
 st.markdown(
     """
 <style>
 section.main > div.block-container {
-    max-width: 920px;
-    padding-top: 2.2rem;
+    max-width: 1180px;
+    padding-top: 1.4rem;
+    padding-left: 3rem;
+    padding-right: 3rem;
 }
 html, body, [class*="css"] {
-    font-size: 20px;
+    font-size: 18px;
 }
 h1 {
-    font-size: 3.05rem !important;
-    line-height: 1.18 !important;
-    margin-bottom: 1.2rem !important;
+    font-size: 2.45rem !important;
+    line-height: 1.16 !important;
+    margin-bottom: 0.8rem !important;
 }
 h2, h3 {
-    line-height: 1.3 !important;
+    line-height: 1.22 !important;
 }
 p, li, label, .stMarkdown, .stCaption {
-    line-height: 1.75 !important;
+    line-height: 1.55 !important;
 }
 div[data-testid="stCaptionContainer"] {
-    font-size: 1rem !important;
+    font-size: 0.95rem !important;
 }
 div.stButton > button {
-    font-size: 1.15rem;
-    padding: 0.55rem 1.05rem;
+    font-size: 1rem;
+    padding: 0.45rem 0.95rem;
 }
 .friendly-note {
-    border-left: 7px solid #2f80ed;
+    border-left: 6px solid #2f80ed;
     background: #eef6ff;
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
-    margin: 1rem 0;
-    font-size: 1.08rem;
-    line-height: 1.7;
+    border-radius: 8px;
+    padding: 0.75rem 0.95rem;
+    margin: 0.75rem 0;
+    font-size: 1rem;
+    line-height: 1.5;
 }
 .friendly-warning {
-    border-left: 7px solid #f2994a;
+    border-left: 6px solid #f2994a;
     background: #fff7ed;
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
-    margin: 1rem 0;
-    font-size: 1.08rem;
-    line-height: 1.7;
+    border-radius: 8px;
+    padding: 0.75rem 0.95rem;
+    margin: 0.75rem 0;
+    font-size: 1rem;
+    line-height: 1.5;
 }
 .friendly-card {
     background: #f7f8fb;
     border: 1px solid #e4e7ee;
-    border-radius: 12px;
-    padding: 1rem 1.15rem;
-    margin: 0.9rem 0;
-    font-size: 1.05rem;
-    line-height: 1.7;
+    border-radius: 8px;
+    padding: 0.75rem 0.95rem;
+    margin: 0.65rem 0;
+    font-size: 0.98rem;
+    line-height: 1.5;
 }
 .big-word {
-    font-size: 1.35rem;
+    font-size: 1.18rem;
     font-weight: 700;
 }
 </style>
@@ -787,7 +789,7 @@ elif st.session_state.page == "training":
         with st.expander("如果需要，可以重新观看讲解视频"):
             st.video(video_url)
     card("<b>1. 不要搜索答案，也不要和别人讨论。</b><br>请只根据你自己的想法作答。")
-    card("<b>2. 第一部分：先看一个词，再看一个新提示。</b><br>你要判断“第一个词”和答案有多相关。看到新提示和分数后，再判断一次。")
+    card("<b>2. 第一部分：先看一个起始提示词，再看一个新增提示词。</b><br>你要判断“起始提示词”和答案有多相关。看到新增提示词和分数后，再判断一次。")
     card("<b>3. 第二部分：自己输入想查的词。</b><br>系统会告诉你这个词和答案有多接近。分数越高，越接近答案。")
     warning_note("所有滑块都是 0-100 分。请拖动滑块，不要一直使用默认的 50。")
     if st.button("进入练习 1"):
@@ -798,23 +800,23 @@ elif st.session_state.page == "training":
 
 
 elif st.session_state.page == "practice_stage1":
-    st.title("练习 1：看完新提示后，再判断一次")
+    st.title("练习 1：看完新增提示词后，再判断一次")
     st.caption("这是练习题，不记录为正式数据。")
     st.subheader("练习题：雨中的门口")
     st.write("一个人站在门口，外面正在下雨。他看了一眼手里的东西，突然决定不出门了。")
-    st.markdown('<span class="big-word">第一个词：雨伞</span>', unsafe_allow_html=True)
+    st.markdown('<span class="big-word">起始提示词：雨伞</span>', unsafe_allow_html=True)
     if st.session_state.practice1_phase == "prior":
         note("这一步只做一件事：先判断“雨伞”和答案有多相关。")
         rating_slider("现在看，你觉得“雨伞”和答案有多相关？", "practice_prior")
         st.caption("请拖动滑块。0 表示完全无关，100 表示非常相关。")
-        if st.button("下一步：查看新提示"):
+        if st.button("下一步：查看新增提示词"):
             st.session_state.practice1_phase = "update"
             reset_screen_timer()
             st.rerun()
     else:
         warning_note("重要：82 分是“钥匙”和答案的接近程度，不是“雨伞”的分数。请用这个新信息，再判断一次“雨伞”。")
-        st.markdown('<span class="big-word">新提示：钥匙</span>', unsafe_allow_html=True)
-        st.markdown('<span class="big-word">新提示和答案的接近程度：82 / 100</span>', unsafe_allow_html=True)
+        st.markdown('<span class="big-word">新增提示词：钥匙</span>', unsafe_allow_html=True)
+        st.markdown('<span class="big-word">新增提示词和答案的接近程度：82 / 100</span>', unsafe_allow_html=True)
         rating_slider("看过“钥匙 82分”后，你觉得“雨伞”和答案有多相关？", "practice_updated")
         rating_slider("你对这次判断有多确定？", "practice_conf")
         if st.button("进入练习 2"):
@@ -849,7 +851,19 @@ elif st.session_state.page == "practice_stage2":
             st.session_state.practice2_history = history
             st.rerun()
     st.caption("正式实验中，每道题要先查询几次；查够后会出现进入答案页的按钮。")
-    if len(history) >= 1 and st.button("我已理解，开始正式实验"):
+    if len(history) >= 1 and st.button("我已理解，继续"):
+        st.session_state.page = "stage1_intro"
+        reset_screen_timer()
+        st.rerun()
+
+
+elif st.session_state.page == "stage1_intro":
+    st.title("练习结束，下面开始正式实验")
+    note("从下一页开始，你的作答会记录为正式实验数据。请继续使用电脑作答，不要搜索答案，也不要和别人讨论。")
+    card("<b>第一部分要做什么：</b>每道题先判断“起始提示词”和答案有多相关；随后看“新增提示词”和分数，再判断一次。")
+    card("<b>请注意：</b>新增提示词的分数，表示新增提示词和答案有多接近；它不是起始提示词的分数。")
+    warning_note("所有滑块都需要根据你的判断拖动。请不要一直使用默认的 50。")
+    if st.button("开始第一部分正式实验"):
         reset_formal_quality_state()
         st.session_state.page = "stage1"
         reset_screen_timer()
@@ -870,14 +884,14 @@ elif st.session_state.page == "stage1":
     show_progress("第一部分", idx, len(st.session_state.order_stage1))
     st.subheader(item.get("title") or f"题目 {idx + 1}")
     st.write(item["riddle_text"])
-    st.markdown(f'<span class="big-word">第一个词：{fb["anchor_word"]}</span>', unsafe_allow_html=True)
+    st.markdown(f'<span class="big-word">起始提示词：{fb["anchor_word"]}</span>', unsafe_allow_html=True)
 
     if st.session_state.stage1_phase == "prior":
         prior_limit = int(st.session_state.get("stage1_prior_timeout_sec", 0))
         show_time_rule(prior_limit)
-        note("这页只做一件事：先判断“第一个词”和答案有多相关。")
+        note("这页只做一件事：先判断“起始提示词”和答案有多相关。")
         prior = rating_slider(f"现在看，你觉得“{fb['anchor_word']}”和答案有多相关？", f"prior_{item_id}")
-        if st.button("下一步：查看新提示", key=f"show_{item_id}"):
+        if st.button("下一步：查看新增提示词", key=f"show_{item_id}"):
             if is_timed_out(prior_limit):
                 event = {
                     "participant_id": st.session_state.pid,
@@ -907,8 +921,8 @@ elif st.session_state.page == "stage1":
         update_limit = int(st.session_state.get("stage1_update_timeout_sec", 0))
         show_time_rule(update_limit)
         warning_note(f"重要：{fb['target_cue_score']} 分是“{fb['cue_word']}”和答案的接近程度，不是“{fb['anchor_word']}”的分数。请用这个新信息，再判断一次“{fb['anchor_word']}”。")
-        st.markdown(f'<span class="big-word">新提示：{fb["cue_word"]}</span>', unsafe_allow_html=True)
-        st.markdown(f'<span class="big-word">新提示和答案的接近程度：{fb["target_cue_score"]} / 100</span>', unsafe_allow_html=True)
+        st.markdown(f'<span class="big-word">新增提示词：{fb["cue_word"]}</span>', unsafe_allow_html=True)
+        st.markdown(f'<span class="big-word">新增提示词和答案的接近程度：{fb["target_cue_score"]} / 100</span>', unsafe_allow_html=True)
         updated = rating_slider(f"看过“{fb['cue_word']} {fb['target_cue_score']}分”后，你觉得“{fb['anchor_word']}”和答案有多相关？", f"updated_{item_id}")
         confidence = rating_slider("你对这次判断有多确定？", f"conf_{item_id}")
         if st.button("提交，进入下一题", key=f"submit_stage1_{item_id}"):
