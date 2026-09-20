@@ -32,7 +32,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.8-wider-guided-flow"
+APP_VERSION = "human-two-stage-v2.9-practice-query-limit"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -834,22 +834,27 @@ elif st.session_state.page == "practice_stage2":
     note("这一步只做一件事：输入一个你想查的词，看看它和答案有多接近。")
     practice_scores = {"钥匙": 90, "门": 72, "口袋": 61, "手机": 21, "蛋糕": 5}
     history = st.session_state.practice2_history
+    practice_max_queries = 3
     if history:
         st.write("练习查询结果：")
         st.table(pd.DataFrame(history))
-    q = st.text_input("想查的词", key="practice_query", help="例如：钥匙、门、手机。一次只输入一个词。")
-    st.caption("请换用新的词；同一个词不要重复查。")
-    if st.button("查询这个词"):
-        query_clean = clean_query_word(q)
-        score = practice_scores.get(query_clean, 30 if query_clean else 0)
-        if not query_clean:
-            st.warning("请输入一个词。")
-        elif query_already_used(history, query_raw=query_clean):
-            st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
-        else:
-            history.append({"第几次": len(history) + 1, "你查的词": query_clean, "这个词和答案的接近程度": f"{score} / 100"})
-            st.session_state.practice2_history = history
-            st.rerun()
+    st.caption(f"练习中最多查询 {practice_max_queries} 个词。正式实验中，每道题也会有查询次数限制。")
+    if len(history) < practice_max_queries:
+        q = st.text_input("想查的词", key=f"practice_query_{len(history)}", help="例如：钥匙、门、手机。一次只输入一个词。")
+        st.caption("请换用新的词；同一个词不要重复查。")
+        if st.button("查询这个词", key=f"practice_do_query_{len(history)}"):
+            query_clean = clean_query_word(q)
+            score = practice_scores.get(query_clean, 30 if query_clean else 0)
+            if not query_clean:
+                st.warning("请输入一个词。")
+            elif query_already_used(history, query_raw=query_clean):
+                st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
+            else:
+                history.append({"第几次": len(history) + 1, "你查的词": query_clean, "这个词和答案的接近程度": f"{score} / 100"})
+                st.session_state.practice2_history = history
+                st.rerun()
+    else:
+        st.info("练习查询次数已满。请点击下面按钮继续。")
     st.caption("正式实验中，每道题要先查询几次；查够后会出现进入答案页的按钮。")
     if len(history) >= 1 and st.button("我已理解，继续"):
         st.session_state.page = "stage1_intro"
