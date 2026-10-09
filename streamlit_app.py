@@ -32,7 +32,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.10-real-practice-feedback"
+APP_VERSION = "human-two-stage-v2.11-distinct-practice-targets"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -523,10 +523,25 @@ def card(text: str) -> None:
     st.markdown(f'<div class="friendly-card">{text}</div>', unsafe_allow_html=True)
 
 
-def resolve_practice_feedback(query: str) -> Any:
-    # Both practice stories use a key as their answer concept. Reuse the
-    # same target probabilities and resolver as formal queries for this group.
-    target_word = "钥匙"
+# Researcher-only solutions define each practice target; never render them.
+PRACTICE_STAGE1 = {
+    "title": "柜台上的纸",
+    "riddle_text": "一个人在柜台前办手续。工作人员把一张纸推到他面前。他没有付钱，在纸上做了一个动作后，就拿到了文件。",
+    "solution_text": "他在办理手续的文件上签了自己的名字。",
+    "network_target_word": "签名",
+    "anchor_word": "钱",
+    "cue_word": "钢笔",
+}
+PRACTICE_STAGE2 = {
+    "title": "打不开的门",
+    "riddle_text": "一个人回到家门口，却没有立刻进门。他在口袋里找了很久，然后笑了。",
+    "solution_text": "他以为钥匙丢了，找了一会儿才发现钥匙仍在口袋里。",
+    "network_target_word": "钥匙",
+}
+
+
+def resolve_practice_feedback(query: str, *, target_word: str) -> Any:
+    # Reuse formal target probabilities and query matching for this group.
     lookup = load_full_lookup(st.session_state.group)
     target_lookup = next(
         (item for item in lookup.values()
@@ -816,27 +831,29 @@ elif st.session_state.page == "training":
 elif st.session_state.page == "practice_stage1":
     st.title("练习 1：看完新增提示词后，再判断一次")
     st.caption("这是练习题，不记录为正式数据。")
-    st.subheader("练习题：雨中的门口")
-    st.write("一个人站在门口，外面正在下雨。他看了一眼手里的东西，突然决定不出门了。")
-    st.markdown('<span class="big-word">起始提示词：雨伞</span>', unsafe_allow_html=True)
+    item = PRACTICE_STAGE1
+    anchor_word, cue_word = item["anchor_word"], item["cue_word"]
+    st.subheader(f"练习题：{item['title']}")
+    st.write(item["riddle_text"])
+    st.markdown(f'<span class="big-word">起始提示词：{anchor_word}</span>', unsafe_allow_html=True)
     if st.session_state.practice1_phase == "prior":
-        note("这一步只做一件事：先判断“雨伞”和答案有多相关。")
-        rating_slider("现在看，你觉得“雨伞”和答案有多相关？", "practice_prior")
+        note(f"这一步只做一件事：先判断“{anchor_word}”和答案有多相关。")
+        rating_slider(f"现在看，你觉得“{anchor_word}”和答案有多相关？", "practice_prior")
         st.caption("请拖动滑块。0 表示完全无关，100 表示非常相关。")
         if st.button("下一步：查看新增提示词"):
             st.session_state.practice1_phase = "update"
             reset_screen_timer()
             st.rerun()
     else:
-        resolution = resolve_practice_feedback("钥匙")
-        if not resolution.has_feedback:
+        resolution = resolve_practice_feedback(cue_word, target_word=item["network_target_word"])
+        if not resolution.has_feedback or resolution.matched_word == item["network_target_word"]:
             st.error("练习提示词的评分未找到，请联系研究人员。")
             st.stop()
         cue_score = resolution.feedback_score
-        warning_note(f"重要：{cue_score} 分是“钥匙”和答案的接近程度，不是“雨伞”的分数。请用这个新信息，再判断一次“雨伞”。")
-        st.markdown('<span class="big-word">新增提示词：钥匙</span>', unsafe_allow_html=True)
+        warning_note(f"重要：{cue_score} 分是“{cue_word}”和答案的接近程度，不是“{anchor_word}”的分数。请用这个新信息，再判断一次“{anchor_word}”。")
+        st.markdown(f'<span class="big-word">新增提示词：{cue_word}</span>', unsafe_allow_html=True)
         st.markdown(f'<span class="big-word">新增提示词和答案的接近程度：{cue_score} / 100</span>', unsafe_allow_html=True)
-        rating_slider(f"看过“钥匙 {cue_score}分”后，你觉得“雨伞”和答案有多相关？", "practice_updated")
+        rating_slider(f"看过“{cue_word} {cue_score}分”后，你觉得“{anchor_word}”和答案有多相关？", "practice_updated")
         rating_slider("你对这次判断有多确定？", "practice_conf")
         if st.button("进入练习 2"):
             st.session_state.page = "practice_stage2"
@@ -848,8 +865,9 @@ elif st.session_state.page == "practice_stage1":
 elif st.session_state.page == "practice_stage2":
     st.title("练习 2：自己输入想查的词")
     st.caption("这是练习题，不记录为正式数据。")
-    st.subheader("练习题：打不开的门")
-    st.write("一个人回到家门口，却没有立刻进门。他在口袋里找了很久，然后笑了。")
+    item = PRACTICE_STAGE2
+    st.subheader(f"练习题：{item['title']}")
+    st.write(item["riddle_text"])
     note("这一步只做一件事：输入一个你想查的词，看看它和答案有多接近。")
     history = st.session_state.practice2_history
     practice_max_queries = 3
@@ -858,7 +876,7 @@ elif st.session_state.page == "practice_stage2":
         st.table(pd.DataFrame(history)[["第几次", "你查的词", "这个词和答案的接近程度"]])
     st.caption(f"练习中最多查询 {practice_max_queries} 个词。正式实验中，每道题也会有查询次数限制。")
     if len(history) < practice_max_queries:
-        q = st.text_input("想查的词", key=f"practice_query_{len(history)}", help="例如：钥匙、门、手机。一次只输入一个词。")
+        q = st.text_input("想查的词", key=f"practice_query_{len(history)}", help="一次只输入一个词。")
         st.caption("请换用新的词；同一个词不要重复查。")
         if st.button("查询这个词", key=f"practice_do_query_{len(history)}"):
             query_clean = clean_query_word(q)
@@ -867,7 +885,7 @@ elif st.session_state.page == "practice_stage2":
             elif query_already_used(history, query_raw=query_clean):
                 st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
             else:
-                resolution = resolve_practice_feedback(query_clean)
+                resolution = resolve_practice_feedback(query_clean, target_word=item["network_target_word"])
                 if not resolution.has_feedback:
                     st.warning("词表中没有找到该词或近似词，请换一个更常见的词。")
                 elif query_already_used(history, query_raw=query_clean, matched_word=resolution.matched_word):
