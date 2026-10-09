@@ -32,9 +32,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v3.3-static-iframe-video-gate"
-STATIC_INSTRUCTION_VIDEO_URL = "/app/static/instruction_video.mp4"
-STATIC_INSTRUCTION_GATE_URL = "/app/static/instruction_gate.html"
+APP_VERSION = "human-two-stage-v2.9-practice-query-limit"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -525,18 +523,6 @@ def card(text: str) -> None:
     st.markdown(f'<div class="friendly-card">{text}</div>', unsafe_allow_html=True)
 
 
-def instruction_video_source() -> str:
-    external_url = str(get_secret("instruction_video_url", "") or "").strip()
-    if external_url:
-        return external_url
-    return STATIC_INSTRUCTION_VIDEO_URL
-
-
-def render_required_video_gate(video_src: str) -> None:
-    gate_src = f"{STATIC_INSTRUCTION_GATE_URL}?{urlencode({'video': video_src})}"
-    st.iframe(gate_src, height=760)
-
-
 def clean_query_word(text: Any) -> str:
     return str(text or "").strip()
 
@@ -674,20 +660,7 @@ init_state()
 
 if st.session_state.page == "intro":
     st.title("文字谜题联想实验")
-    video_src = instruction_video_source()
-    video_done = query_param("video_done", default="") == "1"
-    require_instruction_video = bool_secret("require_instruction_video", True)
-    if video_src and require_instruction_video and not video_done:
-        note("请先完整观看下面的讲解视频。视频播放结束前，不能进入下一步。")
-        render_required_video_gate(video_src)
-        st.stop()
-    if video_src and not require_instruction_video:
-        note("请先看完下面的讲解视频。视频会演示每一步怎么操作。看完后，再填写页面下方的信息。")
-        st.video(video_src)
-    elif video_src and video_done:
-        note("说明视频已完成。请继续填写页面下方的信息。")
-    else:
-        note("这个实验会先带你做两个练习。请按页面提示一步一步完成。")
+    note("这个实验会先带你做两个练习。请按页面提示一步一步完成。")
     st.caption("你的回答将匿名用于科研分析；你可以随时停止实验。")
 
     pid_from_url = query_param("pid", "participant_id", "participantId", "uid", "id")
@@ -806,10 +779,6 @@ if st.session_state.page == "intro":
 
 elif st.session_state.page == "training":
     st.title("正式开始前，请记住三件事")
-    video_src = instruction_video_source()
-    if video_src:
-        with st.expander("如果需要，可以重新观看讲解视频"):
-            st.video(video_src)
     card("<b>1. 不要搜索答案，也不要和别人讨论。</b><br>请只根据你自己的想法作答。")
     card("<b>2. 第一部分：先看一个起始提示词，再看一个新增提示词。</b><br>你要判断“起始提示词”和答案有多相关。看到新增提示词和分数后，再判断一次。")
     card("<b>3. 第二部分：自己输入想查的词。</b><br>系统会告诉你这个词和答案有多接近。分数越高，越接近答案。")
