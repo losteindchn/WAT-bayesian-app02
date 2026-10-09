@@ -32,7 +32,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.9-practice-query-limit"
+APP_VERSION = "human-two-stage-v2.10-real-practice-feedback"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -523,6 +523,28 @@ def card(text: str) -> None:
     st.markdown(f'<div class="friendly-card">{text}</div>', unsafe_allow_html=True)
 
 
+def resolve_practice_feedback(query: str) -> Any:
+    # Both practice stories use a key as their answer concept. Reuse the
+    # same target probabilities and resolver as formal queries for this group.
+    target_word = "钥匙"
+    lookup = load_full_lookup(st.session_state.group)
+    target_lookup = next(
+        (item for item in lookup.values()
+         if item.get("network_target_word", item.get("target_word", "")) == target_word),
+        None,
+    )
+    if target_lookup is None or not target_lookup.get("scores"):
+        st.error("练习题的评分数据未加载，请联系研究人员。")
+        st.stop()
+    return resolve_query_feedback(
+        query,
+        target_word=target_word,
+        scores=target_lookup["scores"],
+        grounding_config=load_query_grounding_config(),
+        semantic_index=load_semantic_index(),
+    )
+
+
 def clean_query_word(text: Any) -> str:
     return str(text or "").strip()
 
@@ -542,6 +564,7 @@ def query_already_used(history: List[Dict[str, Any]], query_raw: Any = "", match
             query_key(row.get("query_word", "")),
             query_key(row.get("matched_word", "")),
             query_key(row.get("查询词", "")),
+            query_key(row.get("你查的词", "")),
         }
         previous.discard("")
         if current & previous:
@@ -805,10 +828,15 @@ elif st.session_state.page == "practice_stage1":
             reset_screen_timer()
             st.rerun()
     else:
-        warning_note("重要：82 分是“钥匙”和答案的接近程度，不是“雨伞”的分数。请用这个新信息，再判断一次“雨伞”。")
+        resolution = resolve_practice_feedback("钥匙")
+        if not resolution.has_feedback:
+            st.error("练习提示词的评分未找到，请联系研究人员。")
+            st.stop()
+        cue_score = resolution.feedback_score
+        warning_note(f"重要：{cue_score} 分是“钥匙”和答案的接近程度，不是“雨伞”的分数。请用这个新信息，再判断一次“雨伞”。")
         st.markdown('<span class="big-word">新增提示词：钥匙</span>', unsafe_allow_html=True)
-        st.markdown('<span class="big-word">新增提示词和答案的接近程度：82 / 100</span>', unsafe_allow_html=True)
-        rating_slider("看过“钥匙 82分”后，你觉得“雨伞”和答案有多相关？", "practice_updated")
+        st.markdown(f'<span class="big-word">新增提示词和答案的接近程度：{cue_score} / 100</span>', unsafe_allow_html=True)
+        rating_slider(f"看过“钥匙 {cue_score}分”后，你觉得“雨伞”和答案有多相关？", "practice_updated")
         rating_slider("你对这次判断有多确定？", "practice_conf")
         if st.button("进入练习 2"):
             st.session_state.page = "practice_stage2"
@@ -823,27 +851,37 @@ elif st.session_state.page == "practice_stage2":
     st.subheader("练习题：打不开的门")
     st.write("一个人回到家门口，却没有立刻进门。他在口袋里找了很久，然后笑了。")
     note("这一步只做一件事：输入一个你想查的词，看看它和答案有多接近。")
-    practice_scores = {"钥匙": 90, "门": 72, "口袋": 61, "手机": 21, "蛋糕": 5}
     history = st.session_state.practice2_history
     practice_max_queries = 3
     if history:
         st.write("练习查询结果：")
-        st.table(pd.DataFrame(history))
+        st.table(pd.DataFrame(history)[["第几次", "你查的词", "这个词和答案的接近程度"]])
     st.caption(f"练习中最多查询 {practice_max_queries} 个词。正式实验中，每道题也会有查询次数限制。")
     if len(history) < practice_max_queries:
         q = st.text_input("想查的词", key=f"practice_query_{len(history)}", help="例如：钥匙、门、手机。一次只输入一个词。")
         st.caption("请换用新的词；同一个词不要重复查。")
         if st.button("查询这个词", key=f"practice_do_query_{len(history)}"):
             query_clean = clean_query_word(q)
-            score = practice_scores.get(query_clean, 30 if query_clean else 0)
             if not query_clean:
                 st.warning("请输入一个词。")
             elif query_already_used(history, query_raw=query_clean):
                 st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
             else:
-                history.append({"第几次": len(history) + 1, "你查的词": query_clean, "这个词和答案的接近程度": f"{score} / 100"})
-                st.session_state.practice2_history = history
-                st.rerun()
+                resolution = resolve_practice_feedback(query_clean)
+                if not resolution.has_feedback:
+                    st.warning("词表中没有找到该词或近似词，请换一个更常见的词。")
+                elif query_already_used(history, query_raw=query_clean, matched_word=resolution.matched_word):
+                    st.warning("这个词对应的查询结果已经出现过了，请换一个新词；本次不计入查询次数。")
+                else:
+                    history.append({
+                        "第几次": len(history) + 1,
+                        "你查的词": query_clean,
+                        "这个词和答案的接近程度": f"{resolution.feedback_score} / 100",
+                        "query_raw": query_clean,
+                        "matched_word": resolution.matched_word,
+                    })
+                    st.session_state.practice2_history = history
+                    st.rerun()
     else:
         st.info("练习查询次数已满。请点击下面按钮继续。")
     st.caption("正式实验中，每道题要先查询几次；查够后会出现进入答案页的按钮。")
