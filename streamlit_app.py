@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import hashlib
+import re
+import uuid
 import json
 import random
 import time
@@ -32,7 +34,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.11-distinct-practice-targets"
+APP_VERSION = "human-two-stage-v2.12-survey-entry"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -234,7 +236,9 @@ def query_param(*names: str, default: str = "") -> str:
                 value = value[0] if value else ""
             if value not in (None, ""):
                 return str(value)
-    except Exception:
+        return default
+    except AttributeError:
+        # Older Streamlit versions expose only the experimental API.
         pass
     try:
         qp = st.experimental_get_query_params()
@@ -366,11 +370,15 @@ def init_gsheet():
 
 
 def infer_group(pid: str, selected: str) -> Optional[str]:
-    pid_u = pid.upper()
-    for group in GROUP_PROFILES:
-        if group in pid_u:
-            return group
-    return selected if selected in GROUP_PROFILES else None
+    """Use explicit routing or a legacy ID prefix; never silently assign a group."""
+    selected = selected.strip().upper()
+    if selected and selected not in GROUP_PROFILES:
+        raise ValueError("实验入口的分组无效，请联系研究人员获取正确链接。")
+    match = re.match(r"^(FH|FN|MH|MN)(?=$|[-_\s]|\d)", pid.strip().upper())
+    id_group = match.group(1) if match else None
+    if selected and id_group and selected != id_group:
+        raise ValueError("编号与实验入口的分组不一致，请联系研究人员确认。")
+    return selected or id_group
 
 
 def init_state() -> None:
@@ -668,7 +676,7 @@ def evaluate_completion_quality() -> Dict[str, Any]:
         flags.append("too_many_empty_queries")
     if counters["no_feedback_query_attempts"] > thresholds["max_no_feedback_query_attempts"]:
         flags.append("too_many_no_feedback_queries")
-    if not bool(st.session_state.get("desktop_confirmed", False)):
+    if bool_secret("require_desktop", True) and not bool(st.session_state.get("desktop_confirmed", False)):
         flags.append("desktop_not_confirmed")
     if expected_stage2 and len(known_story_yes) >= max(2, expected_stage2):
         flags.append("known_story_all_or_most")
@@ -708,25 +716,23 @@ if st.session_state.page == "intro":
     group_from_url = query_param("group", default="").upper()
     return_url = query_param("return_url", "redirect", default="")
 
-    st.subheader("开始前，请填写基本信息")
-    pid = st.text_input("受试者编号", value=pid_from_url, help="请填写问卷平台或研究人员提供的编号。")
-    default_group = group_from_url if group_from_url in GROUP_PROFILES else str(get_secret("default_group", "FH")).upper()
-    if default_group not in GROUP_PROFILES:
-        default_group = "FH"
-    default_group_idx = list(GROUP_PROFILES.keys()).index(default_group)
-    if bool_secret("show_group_selector", False) or bool_secret("show_admin_controls", False):
-        group_choice = st.selectbox("实验分组（请保持默认选项）", list(GROUP_PROFILES.keys()), index=default_group_idx)
-    else:
-        group_choice = default_group
-    age = st.number_input("年龄", min_value=10, max_value=99, value=20)
-    native_chinese = st.selectbox("中文熟练程度", ["母语/近似母语", "熟练", "一般"])
+    st.subheader("准备开始实验")
+    st.caption("基本信息和知情同意由招募问卷收集，此处无需重复填写。")
+    if "generated_participant_id" not in st.session_state:
+        st.session_state.generated_participant_id = "P-" + uuid.uuid4().hex.upper()
+    pid = st.text_input(
+        "受试者编号",
+        value=pid_from_url or st.session_state.generated_participant_id,
+        help="如问卷或研究人员已提供编号，请使用该编号；否则保留自动生成的编号。",
+    )
+    group_choice = group_from_url
+    if bool_secret("show_admin_controls", False) and not group_from_url:
+        group_choice = st.selectbox("实验员分组", [""] + list(GROUP_PROFILES.keys()))
     require_desktop = bool_secret("require_desktop", True)
-    desktop_confirmed = st.checkbox("我正在使用电脑或笔记本电脑完成实验。")
     if require_desktop:
-        st.caption("请不要用手机作答。手机屏幕会影响阅读、输入和查询。")
+        st.caption("请使用电脑或笔记本电脑。点击下方开始按钮即确认正在使用电脑作答。")
     else:
-        st.caption("当前允许非电脑设备进入，但设备信息会用于后续数据质量审核。")
-    consent = st.checkbox("我已了解实验说明，并自愿参加。")
+        st.caption("建议使用电脑或笔记本电脑完成实验。")
 
     stage1_n_limit = int_secret("stage1_n_max", len(DEFAULT_STAGE1_ITEM_IDS_20))
     stage1_n = min(int_secret("stage1_n", len(DEFAULT_STAGE1_ITEM_IDS_20)), stage1_n_limit)
@@ -753,10 +759,18 @@ if st.session_state.page == "intro":
     if get_secret("gsheet_url") is None:
         st.warning("当前为本地测试模式：未配置 Google Sheet secrets。")
 
-    if st.button("开始"):
-        group = infer_group(pid, group_choice)
-        if not pid.strip() or not group or not consent or (require_desktop and not desktop_confirmed):
-            st.warning("请填写受试者编号，并勾选电脑作答和知情同意。")
+    start_label = "开始实验（我正在使用电脑）" if require_desktop else "开始实验"
+    if st.button(start_label):
+        if not pid.strip():
+            st.warning("请填写或保留自动生成的受试者编号。")
+            st.stop()
+        try:
+            group = infer_group(pid, group_choice)
+        except ValueError as exc:
+            st.warning(str(exc))
+            st.stop()
+        if not group:
+            st.warning("当前链接缺少实验分组，请返回招募问卷使用对应入口，或联系研究人员。")
             st.stop()
         if int(min_queries) > int(max_queries):
             st.warning("最少查询次数不能大于最多查询次数。")
@@ -796,10 +810,8 @@ if st.session_state.page == "intro":
         st.session_state.platform_source = platform_source.strip()
         st.session_state.condition = condition.strip()
         st.session_state.return_url = return_url.strip()
-        st.session_state.desktop_confirmed = bool(desktop_confirmed)
+        st.session_state.desktop_confirmed = bool(require_desktop)
         st.session_state.group = group
-        st.session_state.age = int(age)
-        st.session_state.native_chinese = native_chinese
         st.session_state.stage1_n = len(order_stage1)
         st.session_state.stage2_n = len(order_stage2)
         st.session_state.min_queries = int(min_queries)

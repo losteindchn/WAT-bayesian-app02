@@ -267,3 +267,37 @@ Test with URL parameters:
 ```text
 http://localhost:8501/?pid=test_FH_001&source=local&group=FH&condition=balanced_stage1
 ```
+
+
+## Credamo manual-recruitment entry (2026-10-27)
+
+Collect consent, age, gender, education and Chinese proficiency in the recruitment
+survey. Streamlit asks only for the experiment ID before practice; all task ratings,
+answers and immediate experience measures remain in the experiment.
+
+Route eligible participants to the matching link (replace the domain with the live app):
+
+| Survey group | Entry link |
+| --- | --- |
+| Female, higher education (including currently enrolled) | `https://your-app.streamlit.app/?source=credamo&group=FH` |
+| Female, no higher education | `https://your-app.streamlit.app/?source=credamo&group=FN` |
+| Male, higher education (including currently enrolled) | `https://your-app.streamlit.app/?source=credamo&group=MH` |
+| Male, no higher education | `https://your-app.streamlit.app/?source=credamo&group=MN` |
+
+Higher education here means full-time junior college or bachelor's education and
+above, including current enrollment, as screened by the recruitment survey.
+The app cannot verify this from the link: recruitment staff must route participants
+correctly and enforce the adult/Chinese-proficiency eligibility and group quotas.
+
+Append `&pid=...` if a preassigned anonymous ID is available. Otherwise the app
+prefills a random ID, retained during the Streamlit session. The participant may
+replace it with their assigned ID. A full refresh/new session may generate a new
+ID; this is not a cross-device resume or duplicate-participation prevention system.
+Legacy IDs beginning FH/FN/MH/MN followed by a digit, separator or end may also
+specify the group. Invalid groups, missing groups and conflicting ID prefixes are
+blocked before practice. `default_group` is no longer used as a silent fallback.
+
+The start button confirms computer use when `require_desktop=true`; it is not
+automatic device detection. Existing age and Chinese-proficiency sheet columns
+are retained for compatibility but left empty for new sessions. The completion
+and review codes still map the experiment records back to the recruitment survey.
