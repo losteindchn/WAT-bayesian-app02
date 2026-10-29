@@ -56,7 +56,7 @@ condition = "balanced_stage1"
 stage1_n = 20
 stage1_n_max = 20
 stage2_n = 5
-min_queries = 3
+min_queries = 0
 max_queries = 8
 
 require_desktop = true
@@ -206,9 +206,7 @@ invalid_query_attempts
 
 ## Completion-Code Gate
 
-At the final page, the app evaluates whether the session is complete and
-eligible for payment. The default checks require all formal Stage 1 and Stage 2
-trials to be completed, no Stage 2 timeout, limited invalid query attempts,
+At the final page, the app evaluates whether the session passes automated checks or needs manual review. A review code is not automatic rejection or nonpayment. The default checks require every formal trial to be attempted and every Stage 2 final page to be submitted, no Stage 2 timeout, limited invalid query attempts,
 desktop confirmation, and a minimum total duration.
 
 If the session passes, the app shows a formal `INS-*` completion code and logs
@@ -225,7 +223,7 @@ Sheet / event log.
 The current formal flow is:
 
 ```text
-intro / consent / desktop confirmation
+recruitment-survey consent -> ID / desktop confirmation
   -> instruction page with optional video
   -> practice Stage 1
   -> practice Stage 2
@@ -301,3 +299,45 @@ The start button confirms computer use when `require_desktop=true`; it is not
 automatic device detection. Existing age and Chinese-proficiency sheet columns
 are retained for compatibility but left empty for new sessions. The completion
 and review codes still map the experiment records back to the recruitment survey.
+
+
+## Natural stopping and process timing 2026-10-29
+
+Version `human-two-stage-v2.13-natural-stopping` keeps the same group-specific
+networks, feedback tables, 20 updating trials and 5 active-search puzzles.
+Formal search has no minimum number of queries, even if an older deployment
+secret still says `min_queries = 3`. Both a ready-explanation route and an
+unsolved route are available before the first query and after every query.
+An explanation-forming participant must enter text; an explicitly unsolved
+participant may submit partial text or no proposed explanation. Unsolved status,
+zero queries and low Aha ratings do not trigger a quality failure by themselves.
+The original video is retained. A prominent written clarification before practice
+and the formal search instructions state the current stopping rule.
+
+The query phase has one continuous 480-second default budget per puzzle; saving
+a query no longer restarts it. On the next app interaction after expiry, search
+closes and the participant can still submit an answer/current thoughts. The
+answer phase has a separate default 240-second budget. Late final submissions
+are retained with flags and a manual-review code, rather than silently dropped.
+Streamlit checks expiry on interaction/rerender, not with a browser alarm.
+
+New events are `stage2_trial_start`, `stage2_feedback_ready` and
+`stage2_search_stop`; query and final-answer event names remain unchanged.
+Each event carries a stable `trial_id`, UTC/Unix action time, trial elapsed time,
+query-phase elapsed time and, after stopping, answer-phase elapsed time.
+Query submission, feedback computation and feedback render readiness are
+separately recorded. `explanation_formed` is a reported readiness event, not an
+objective timestamp of subjective Aha onset. Timestamps are server-side; feedback
+render readiness is not a measurement of the browser's actual paint time.
+
+Existing Google Sheet column positions, including `payload_json`, are preserved;
+new columns are appended to the right. The sheet is widened when necessary.
+An unexpected existing header is left untouched and a versioned worksheet is
+used. Failed cloud writes retain local retry records and flag manual review.
+Local records alone are not a durable backup of an ephemeral cloud container.
+
+Offline regression checks (no production credentials or cloud writes):
+
+```bash
+python tests/test_natural_stopping.py
+```

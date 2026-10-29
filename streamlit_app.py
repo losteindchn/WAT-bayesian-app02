@@ -10,7 +10,7 @@ import uuid
 import json
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import Any, Dict, List, Optional
@@ -34,7 +34,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.12-survey-entry"
+APP_VERSION = "human-two-stage-v2.13-natural-stopping"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -191,6 +191,25 @@ SHEET_COLUMNS = [
     "invalid_query_attempts",
     "elapsed_on_screen_sec",
     "payload_json",
+    "trial_id",
+    "event_time_unix",
+    "event_time_utc",
+    "trial_started_at_unix",
+    "trial_elapsed_sec",
+    "query_phase_elapsed_sec",
+    "answer_phase_elapsed_sec",
+    "query_submitted_at_unix",
+    "feedback_computed_at_unix",
+    "feedback_render_ready_at_unix",
+    "feedback_processing_sec",
+    "since_last_feedback_sec",
+    "search_stopped_at_unix",
+    "stop_reason",
+    "self_report_status",
+    "has_written_guess",
+    "query_timeout_flag",
+    "answer_timeout_flag",
+    "timing_source",
 ]
 
 
@@ -364,8 +383,20 @@ def init_gsheet():
         sheet = spreadsheet.add_worksheet(title=worksheet_name, rows=10000, cols=len(SHEET_COLUMNS))
 
     first_row = sheet.row_values(1)
-    if not first_row or first_row[: len(SHEET_COLUMNS)] != SHEET_COLUMNS:
-        sheet.update("A1", [SHEET_COLUMNS])
+    # Only append columns to a known prefix. Never relabel historical payload cells.
+    if first_row and first_row != SHEET_COLUMNS[:len(first_row)]:
+        compatible_name = worksheet_name + "_natural_stopping_v213"
+        try:
+            sheet = spreadsheet.worksheet(compatible_name)
+        except WorksheetNotFound:
+            sheet = spreadsheet.add_worksheet(title=compatible_name, rows=10000, cols=len(SHEET_COLUMNS))
+        first_row = sheet.row_values(1)
+        if first_row and first_row != SHEET_COLUMNS[:len(first_row)]:
+            raise ValueError("Unexpected event-sheet schema; historical rows were left untouched")
+    if sheet.col_count < len(SHEET_COLUMNS):
+        sheet.resize(cols=len(SHEET_COLUMNS))
+    if first_row != SHEET_COLUMNS:
+        sheet.update(range_name="A1", values=[SHEET_COLUMNS])
     return sheet
 
 
@@ -403,7 +434,11 @@ def init_state() -> None:
 
 def log_event(row: Dict[str, Any]) -> None:
     row = dict(row)
-    row["timestamp"] = datetime.now().isoformat()
+    event_time = float(row.setdefault("event_time_unix", time.time()))
+    row["timestamp"] = datetime.fromtimestamp(event_time).isoformat()
+    row["event_time_utc"] = datetime.fromtimestamp(event_time, timezone.utc).isoformat()
+    if row.get("stage", "").startswith("stage2_"):
+        row.update(stage2_timing_fields(event_time))
     row["app_version"] = APP_VERSION
     row.setdefault("materials_file", materials_file_name())
     row.setdefault("stage1_lookup_prefix", stage1_lookup_prefix())
@@ -431,11 +466,17 @@ def log_event(row: Dict[str, Any]) -> None:
     st.session_state.responses.append(row)
     append_jsonl(LOG_DIR / "human_events.jsonl", row)
     append_gsheet(row)
-    st.session_state.screen_started_at = time.time()
+
 
 
 def append_gsheet(row: Dict[str, Any]) -> None:
-    sheet = init_gsheet()
+    try:
+        sheet = init_gsheet()
+    except Exception as exc:
+        st.session_state.sheet_status = "failed"
+        st.session_state.sheet_error = str(exc)
+        append_jsonl(LOG_DIR / "human_events_unsynced.jsonl", {"error": str(exc), "row": row})
+        return
     if sheet is None:
         st.session_state.sheet_status = "local_only"
         return
@@ -507,6 +548,118 @@ def elapsed_screen_sec() -> float:
 
 def is_timed_out(limit_sec: int) -> bool:
     return bool(limit_sec and limit_sec > 0 and elapsed_screen_sec() > float(limit_sec))
+
+
+def ensure_stage2_trial(item: Dict[str, Any]) -> None:
+    trial_id = f"{st.session_state.session_id}:stage2:{st.session_state.stage2_idx}:{item['item_id']}"
+    current = st.session_state.get("stage2_trial", {})
+    if current.get("trial_id") == trial_id:
+        return
+    now = time.time()
+    st.session_state.stage2_trial = {
+        "trial_id": trial_id,
+        "started_at": now,
+        "query_started_at": now,
+        "search_stopped_at": None,
+        "answer_started_at": None,
+        "last_feedback_at": None,
+        "rendered_query_index": 0,
+        "stop_reason": "",
+    }
+    st.session_state.stage2_phase = "query"
+    st.session_state.explore_history = []
+    reset_screen_timer()
+    event = {
+        "participant_id": st.session_state.pid,
+        "group": st.session_state.group,
+        "stage": "stage2_trial_start",
+        "trial_set": "stage2",
+        "item_id": item["item_id"],
+        "title": item.get("title", ""),
+        "event_time_unix": now,
+    }
+    add_researcher_fields(event, item)
+    log_event(event)
+
+
+def stage2_timing_fields(now: float) -> Dict[str, Any]:
+    trial = st.session_state.get("stage2_trial", {})
+    if not trial:
+        return {}
+    stopped = trial.get("search_stopped_at")
+    answer_start = trial.get("answer_started_at")
+    last_feedback = trial.get("last_feedback_at")
+    return {
+        "trial_id": trial["trial_id"],
+        "trial_started_at_unix": trial["started_at"],
+        "trial_elapsed_sec": round(max(0.0, now - trial["started_at"]), 3),
+        "query_phase_elapsed_sec": round(max(0.0, (stopped if stopped is not None else now) - trial["query_started_at"]), 3),
+        "answer_phase_elapsed_sec": round(max(0.0, now - answer_start), 3) if answer_start is not None else "",
+        "since_last_feedback_sec": round(max(0.0, now - last_feedback), 3) if last_feedback is not None else "",
+        "search_stopped_at_unix": stopped if stopped is not None else "",
+        "stop_reason": trial.get("stop_reason", ""),
+        "timing_source": "server_action_and_render_ready_not_client_paint",
+    }
+
+
+def stage2_query_timed_out(limit_sec: int, now: Optional[float] = None) -> bool:
+    trial = st.session_state.get("stage2_trial", {})
+    return bool(limit_sec > 0 and trial and
+                (time.time() if now is None else now) - trial["query_started_at"] > limit_sec)
+
+
+def stop_stage2_search(item: Dict[str, Any], reason: str, now: Optional[float] = None) -> None:
+    trial = st.session_state.stage2_trial
+    if trial.get("search_stopped_at") is not None:
+        return
+    now = time.time() if now is None else now
+    trial["search_stopped_at"] = now
+    trial["answer_started_at"] = now
+    trial["stop_reason"] = reason
+    st.session_state.stage2_phase = "answer"
+    reset_screen_timer()
+    event = {
+        "participant_id": st.session_state.pid,
+        "group": st.session_state.group,
+        "stage": "stage2_search_stop",
+        "trial_set": "stage2",
+        "item_id": item["item_id"],
+        "title": item.get("title", ""),
+        "event_time_unix": now,
+        "n_queries": len(st.session_state.explore_history),
+        "query_history": list(st.session_state.explore_history),
+        "query_timeout_flag": reason == "query_timeout",
+        "timeout_flag": reason == "query_timeout",
+        "invalid_reason": "stage2_query_timeout" if reason == "query_timeout" else "",
+    }
+    add_researcher_fields(event, item)
+    log_event(event)
+
+
+def record_feedback_render_ready(item: Dict[str, Any], history: List[Dict[str, Any]]) -> None:
+    trial = st.session_state.stage2_trial
+    if not history or trial["rendered_query_index"] >= len(history):
+        return
+    now = time.time()
+    trial["rendered_query_index"] = len(history)
+    trial["last_feedback_at"] = now
+    history[-1]["feedback_render_ready_at_unix"] = now
+    event = {
+        "participant_id": st.session_state.pid,
+        "group": st.session_state.group,
+        "stage": "stage2_feedback_ready",
+        "trial_set": "stage2",
+        "item_id": item["item_id"],
+        "title": item.get("title", ""),
+        "query_index": len(history),
+        "event_time_unix": now,
+        "feedback_render_ready_at_unix": now,
+        "query_submitted_at_unix": history[-1]["query_submitted_at_unix"],
+        "feedback_computed_at_unix": history[-1]["feedback_computed_at_unix"],
+        "feedback_processing_sec": history[-1]["feedback_processing_sec"],
+    }
+    add_researcher_fields(event, item)
+    log_event(event)
 
 
 def show_time_rule(limit_sec: int) -> None:
@@ -632,7 +785,9 @@ def evaluate_completion_quality() -> Dict[str, Any]:
     stage1_timeouts = [r for r in responses if r.get("stage") == "stage1_timeout"]
     stage2_queries = [r for r in responses if r.get("stage") == "stage2_active_query"]
     stage2_finals = [r for r in responses if r.get("stage") == "stage2_final_guess"]
-    stage2_timeouts = [r for r in responses if r.get("stage") == "stage2_timeout"]
+    stage2_timeout_ids = {r.get("trial_id", r.get("item_id")) for r in responses
+                          if str(r.get("stage", "")).startswith("stage2_") and r.get("timeout_flag")}
+    stage2_timeouts = list(stage2_timeout_ids)
     known_story_yes = [
         r for r in stage2_finals
         if str(r.get("known_story", "")).strip() == "是"
@@ -658,7 +813,7 @@ def evaluate_completion_quality() -> Dict[str, Any]:
     thresholds = quality_thresholds()
 
     flags = []
-    if len(stage1_valid) < expected_stage1:
+    if len(stage1_valid) + len(stage1_timeouts) < expected_stage1:
         flags.append("incomplete_stage1")
     if len(stage2_finals) < expected_stage2:
         flags.append("incomplete_stage2")
@@ -678,6 +833,8 @@ def evaluate_completion_quality() -> Dict[str, Any]:
         flags.append("too_many_no_feedback_queries")
     if bool_secret("require_desktop", True) and not bool(st.session_state.get("desktop_confirmed", False)):
         flags.append("desktop_not_confirmed")
+    if st.session_state.get("sheet_status") == "failed":
+        flags.append("cloud_sync_pending")
     if expected_stage2 and len(known_story_yes) >= max(2, expected_stage2):
         flags.append("known_story_all_or_most")
 
@@ -737,7 +894,8 @@ if st.session_state.page == "intro":
     stage1_n_limit = int_secret("stage1_n_max", len(DEFAULT_STAGE1_ITEM_IDS_20))
     stage1_n = min(int_secret("stage1_n", len(DEFAULT_STAGE1_ITEM_IDS_20)), stage1_n_limit)
     stage2_n = int_secret("stage2_n", 5)
-    min_queries = int_secret("min_queries", 3)
+    # Legacy min_queries secrets must not reinstate forced post-solution queries.
+    min_queries = 0
     max_queries = int_secret("max_queries", 8)
     stage1_timeout_limit = int_secret("stage1_timeout_max_sec", 120)
     stage1_prior_timeout_sec = min(int_secret("stage1_prior_timeout_sec", 120), stage1_timeout_limit)
@@ -748,7 +906,6 @@ if st.session_state.page == "intro":
         with st.expander("实验员设置"):
             stage1_n = st.number_input("Stage 1 题数", min_value=1, max_value=max(1, min(80, stage1_n_limit)), value=stage1_n)
             stage2_n = st.number_input("Stage 2 题数", min_value=1, max_value=80, value=stage2_n)
-            min_queries = st.number_input("Stage 2 每题最少查询次数", min_value=0, max_value=20, value=min_queries)
             max_queries = st.number_input("Stage 2 每题最多查询次数", min_value=1, max_value=20, value=max_queries)
             stage1_prior_timeout_sec = st.number_input("Stage 1 初始判断时间上限（秒）", min_value=0, max_value=max(0, stage1_timeout_limit), value=stage1_prior_timeout_sec)
             stage1_update_timeout_sec = st.number_input("Stage 1 更新判断时间上限（秒）", min_value=0, max_value=max(0, stage1_timeout_limit), value=stage1_update_timeout_sec)
@@ -829,6 +986,7 @@ if st.session_state.page == "intro":
 
 elif st.session_state.page == "training":
     st.title("正式开始前，请记住三件事")
+    note("正式实验规则：不要求最低查询次数。视频中提到的“达到最低查询次数后”不适用于本次正式实验；形成解释后可以直接作答，暂时无法解答也可提交现有想法。")
     card("<b>1. 不要搜索答案，也不要和别人讨论。</b><br>请只根据你自己的想法作答。")
     card("<b>2. 第一部分：先看一个起始提示词，再看一个新增提示词。</b><br>你要判断“起始提示词”和答案有多相关。看到新增提示词和分数后，再判断一次。")
     card("<b>3. 第二部分：自己输入想查的词。</b><br>系统会告诉你这个词和答案有多接近。分数越高，越接近答案。")
@@ -914,7 +1072,7 @@ elif st.session_state.page == "practice_stage2":
                     st.rerun()
     else:
         st.info("练习查询次数已满。请点击下面按钮继续。")
-    st.caption("正式实验中，每道题要先查询几次；查够后会出现进入答案页的按钮。")
+    st.caption("正式实验中随时可以进入答案页；已经形成解释时不必凑足查询次数，暂时无法解答也可以提交现有想法。")
     if len(history) >= 1 and st.button("我已理解，继续"):
         st.session_state.page = "stage1_intro"
         reset_screen_timer()
@@ -975,6 +1133,7 @@ elif st.session_state.page == "stage1":
                 log_event(event)
                 st.session_state.stage1_idx += 1
                 st.session_state.stage1_phase = "prior"
+                reset_screen_timer()
                 st.warning("本轮已超时，系统已记录为无效并进入下一题。")
                 st.rerun()
             st.session_state.temp_prior = prior
@@ -1012,15 +1171,16 @@ elif st.session_state.page == "stage1":
             log_event(event)
             st.session_state.stage1_idx += 1
             st.session_state.stage1_phase = "prior"
+            reset_screen_timer()
             st.rerun()
 
 
 elif st.session_state.page == "stage2_intro":
     st.title("第二部分：自己查词")
-    card("你会看到新的谜题。先不要写答案。")
+    card("你会看到新的谜题，可以自己决定何时查询、何时进入答案页。")
     card("你要输入自己想查的词。系统会告诉你：这个词和答案有多接近。")
     card("分数越高，表示这个词越接近答案。同一道题不要重复查同一个词。")
-    st.caption(f"每题至少查询 {st.session_state.get('min_queries', 0)} 次，最多查询 {st.session_state.max_queries} 次。")
+    st.caption(f"每题最多查询 {st.session_state.max_queries} 次。随时可以进入答案页，不要求最低查询次数。")
     if st.button("进入第二部分"):
         st.session_state.page = "stage2"
         st.session_state.stage2_phase = "query"
@@ -1039,18 +1199,24 @@ elif st.session_state.page == "stage2":
 
     item = materials[st.session_state.order_stage2[idx]]
     item_id = item["item_id"]
+    ensure_stage2_trial(item)
     scores = full_lookup[item_id]["scores"]
     grounding_config = load_query_grounding_config()
     semantic_index = load_semantic_index()
     show_progress("第二部分", idx, len(st.session_state.order_stage2))
     st.subheader(item.get("title") or f"探索题 {idx + 1}")
     st.write(item["riddle_text"])
-
     history = st.session_state.explore_history
-    min_queries = int(st.session_state.get("min_queries", 0))
-    if st.session_state.get("stage2_phase", "query") == "query":
+    trial = st.session_state.stage2_trial
+
+    if st.session_state.stage2_phase == "query":
         query_limit = int(st.session_state.get("stage2_query_timeout_sec", 0))
-        show_time_rule(query_limit)
+        if stage2_query_timed_out(query_limit):
+            stop_stage2_search(item, "query_timeout")
+            st.rerun()
+        if query_limit > 0:
+            remaining = max(0, query_limit - (time.time() - trial["query_started_at"]))
+            st.caption(f"本题查询阶段共限 {query_limit // 60} 分 {query_limit % 60} 秒，当前约剩 {int(remaining)} 秒；查询后不会重新计时。")
         if history:
             visible_history = [
                 {"第几次": h["query_index"], "你查的词": h["query_raw"], "这个词和答案的接近程度": f"{h['score']} / 100"}
@@ -1058,32 +1224,26 @@ elif st.session_state.page == "stage2":
             ]
             st.write("已查询结果：")
             st.table(pd.DataFrame(visible_history))
+            record_feedback_render_ready(item, history)
 
-        note(f"这页只做一件事：输入一个想查的词。已查询 {len(history)} 次；至少 {min_queries} 次后可以进入答案页。")
+        note(f"已查询 {len(history)} 次，最多 {st.session_state.max_queries} 次。你可以继续查询，也可以随时进入答案页。")
+        # Stopping actions precede the query field so a ready answer is never gated by query count.
+        if st.button("我形成了一个解释，去填写答案", key=f"know_{item_id}"):
+            now = time.time()
+            stop_stage2_search(item, "query_timeout" if stage2_query_timed_out(query_limit, now) else "explanation_formed", now)
+            st.rerun()
+        if st.button("暂时无法解答，提交现有想法", key=f"unsolved_{item_id}"):
+            now = time.time()
+            stop_stage2_search(item, "query_timeout" if stage2_query_timed_out(query_limit, now) else "unable_to_solve", now)
+            st.rerun()
+
         if len(history) < st.session_state.max_queries:
             query = st.text_input("想查的词", key=f"query_{item_id}_{len(history)}", help="一次只输入一个常见词，不要输入一句话。")
             st.caption("请换用新的词；已经查过的词不会重复计数。")
             if st.button("查询这个词", key=f"do_query_{item_id}_{len(history)}"):
-                if is_timed_out(query_limit):
-                    event = {
-                        "participant_id": st.session_state.pid,
-                        "group": st.session_state.group,
-                        "stage": "stage2_timeout",
-                        "trial_set": "stage2",
-                        "item_id": item_id,
-                        "title": item.get("title", ""),
-                        "n_queries": len(history),
-                        "query_history": history,
-                        "screen_timeout_sec": query_limit,
-                        "timeout_flag": True,
-                        "invalid_reason": "stage2_query_timeout",
-                    }
-                    add_researcher_fields(event, item)
-                    log_event(event)
-                    st.session_state.stage2_idx += 1
-                    st.session_state.stage2_phase = "query"
-                    st.session_state.explore_history = []
-                    st.warning("本题查询阶段已超时，系统已记录为无效并进入下一题。")
+                submitted_at = time.time()
+                if stage2_query_timed_out(query_limit, submitted_at):
+                    stop_stage2_search(item, "query_timeout", submitted_at)
                     st.rerun()
                 query_clean = clean_query_word(query)
                 if not query_clean:
@@ -1095,11 +1255,8 @@ elif st.session_state.page == "stage2":
                     st.warning("这个词已经查询过了，请换一个新词；本次不计入查询次数。")
                     st.stop()
                 resolution = resolve_query_feedback(
-                    query_clean,
-                    target_word=item.get("network_target_word", ""),
-                    scores=scores,
-                    grounding_config=grounding_config,
-                    semantic_index=semantic_index,
+                    query_clean, target_word=item.get("network_target_word", ""), scores=scores,
+                    grounding_config=grounding_config, semantic_index=semantic_index,
                 )
                 if not resolution.has_feedback:
                     increment_counter("no_feedback_query_attempts")
@@ -1109,82 +1266,70 @@ elif st.session_state.page == "stage2":
                     increment_counter("duplicate_query_attempts")
                     st.warning("这个词对应的查询结果已经出现过了，请换一个新词；本次不计入查询次数。")
                     st.stop()
-                event = {
-                    "participant_id": st.session_state.pid,
-                    "group": st.session_state.group,
-                    "stage": "stage2_active_query",
-                    "trial_set": "stage2",
-                    "item_id": item_id,
-                    "title": item.get("title", ""),
-                    "query_index": len(history) + 1,
-                    "query_raw": query_clean,
-                }
+                computed_at = time.time()
+                timing = {"query_submitted_at_unix": submitted_at,
+                          "feedback_computed_at_unix": computed_at,
+                          "feedback_processing_sec": round(computed_at - submitted_at, 3)}
+                event = {"participant_id": st.session_state.pid, "group": st.session_state.group,
+                         "stage": "stage2_active_query", "trial_set": "stage2", "item_id": item_id,
+                         "title": item.get("title", ""), "query_index": len(history) + 1,
+                         "query_raw": query_clean, "event_time_unix": submitted_at, **timing}
                 event.update(resolution.as_event_fields())
                 event["query_word"] = resolution.matched_word
                 add_researcher_fields(event, item)
                 log_event(event)
-                history.append(
-                    {
-                        "query_index": len(history) + 1,
-                        "query_raw": query_clean,
-                        "query_word": resolution.matched_word,
-                        "matched_word": resolution.matched_word,
-                        "match_type": resolution.match_type,
-                        "match_confidence": round(float(resolution.match_confidence), 4),
-                        "resolver_source": resolution.resolver_source,
-                        "feedback_prob": resolution.feedback_prob,
-                        "score": resolution.feedback_score,
-                    }
-                )
+                history.append({"query_index": len(history) + 1, "query_raw": query_clean,
+                                "query_word": resolution.matched_word, "matched_word": resolution.matched_word,
+                                "match_type": resolution.match_type,
+                                "match_confidence": round(float(resolution.match_confidence), 4),
+                                "resolver_source": resolution.resolver_source,
+                                "feedback_prob": resolution.feedback_prob, "score": resolution.feedback_score,
+                                **timing})
                 st.session_state.explore_history = history
                 st.rerun()
-
-        can_answer = len(history) >= min_queries
-        if can_answer:
-            if st.button("我知道答案了，去填写答案", key=f"know_{item_id}"):
-                st.session_state.stage2_phase = "answer"
-                reset_screen_timer()
-                st.rerun()
         else:
-            st.caption(f"还需要至少查询 {min_queries - len(history)} 次。")
+            st.info("本题查询次数已满。请根据目前的想法选择上方按钮，进入答案页。")
     else:
         answer_limit = int(st.session_state.get("stage2_answer_timeout_sec", 0))
         show_time_rule(answer_limit)
+        if trial["stop_reason"] == "query_timeout":
+            st.info("本题查询阶段已到时间。仍可填写当前想法；即使尚未解出，也请如实完成评价。")
         if history:
-            visible_history = [
+            st.table(pd.DataFrame([
                 {"第几次": h["query_index"], "你查的词": h["query_raw"], "这个词和答案的接近程度": f"{h['score']} / 100"}
                 for h in history
-            ]
-            st.write("你的查询结果：")
-            st.table(pd.DataFrame(visible_history))
-        note("请根据题目和你查到的分数，写出你认为的答案或解释。")
-        guess = st.text_area("你的答案或解释", key=f"guess_{item_id}")
+            ]))
+        status_options = ["我形成了一个解释", "我还没有形成完整解释"]
+        self_report = st.radio("目前的作答状态", status_options,
+                               index=0 if trial["stop_reason"] == "explanation_formed" else 1,
+                               key=f"answer_status_{item_id}")
+        note("请写出自己的答案或现有想法。如果还没有形成解释，可明确选择第二项；不要求猜出标准答案。")
+        guess = st.text_area("你的答案或现有想法", key=f"guess_{item_id}")
         aha = rating_slider("你是否有突然明白的感觉", f"aha_{item_id}")
         aha_suddenness = rating_slider("这个想法出现得有多突然", f"aha_sudden_{item_id}")
-        aha_surprise = rating_slider("这个答案让你有多惊讶", f"aha_surprise_{item_id}")
-        confidence = rating_slider("你对这个答案有多确定？", f"final_conf_{item_id}")
+        aha_surprise = rating_slider("这个答案或想法让你有多惊讶", f"aha_surprise_{item_id}")
+        confidence = rating_slider("你对当前答案或想法有多确定？", f"final_conf_{item_id}")
         known_story = st.radio("你以前是否看过这个谜题或知道答案？", ["否", "不确定", "是"], horizontal=True, key=f"known_{item_id}")
         if st.button("提交并进入下一题", key=f"finish_{item_id}"):
-            timeout = is_timed_out(answer_limit)
-            event = {
-                    "participant_id": st.session_state.pid,
-                    "group": st.session_state.group,
-                    "stage": "stage2_timeout" if timeout else "stage2_final_guess",
-                    "trial_set": "stage2",
-                    "item_id": item_id,
-                    "title": item.get("title", ""),
-                    "guess": guess,
-                    "aha": aha / 100,
-                    "aha_suddenness": aha_suddenness / 100,
-                    "aha_surprise": aha_surprise / 100,
-                    "confidence": confidence / 100,
-                    "known_story": known_story,
-                    "n_queries": len(history),
-                    "query_history": history,
-                    "screen_timeout_sec": answer_limit,
-                    "timeout_flag": timeout,
-                    "invalid_reason": "stage2_answer_timeout" if timeout else "",
-                }
+            submitted_at = time.time()
+            if self_report == status_options[0] and not guess.strip():
+                st.warning("请填写你形成的解释；如果尚未形成解释，请选择第二项。")
+                st.stop()
+            answer_timeout = bool(answer_limit > 0 and submitted_at - trial["answer_started_at"] > answer_limit)
+            query_timeout = trial["stop_reason"] == "query_timeout"
+            reasons = [name for condition, name in [(query_timeout, "stage2_query_timeout"),
+                                                   (answer_timeout, "stage2_answer_timeout")] if condition]
+            event = {"participant_id": st.session_state.pid, "group": st.session_state.group,
+                     "stage": "stage2_final_guess", "trial_set": "stage2", "item_id": item_id,
+                     "title": item.get("title", ""), "event_time_unix": submitted_at,
+                     "guess": guess.strip(), "has_written_guess": bool(guess.strip()),
+                     "self_report_status": "explanation_formed" if self_report == status_options[0] else "not_solved",
+                     "aha": aha / 100, "aha_suddenness": aha_suddenness / 100,
+                     "aha_surprise": aha_surprise / 100, "confidence": confidence / 100,
+                     "known_story": known_story, "n_queries": len(history), "query_history": list(history),
+                     "screen_timeout_sec": answer_limit, "timeout_flag": query_timeout or answer_timeout,
+                     "query_timeout_flag": query_timeout, "answer_timeout_flag": answer_timeout,
+                     "invalid_reason": ";".join(reasons)}
             add_researcher_fields(event, item)
             log_event(event)
             st.session_state.stage2_idx += 1
