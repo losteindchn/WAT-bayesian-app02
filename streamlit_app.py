@@ -35,7 +35,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.16-unified-completion"
+APP_VERSION = "human-two-stage-v2.17-return-reminders"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -906,6 +906,8 @@ if st.session_state.page == "intro":
     group_from_url = query_param("group", default="").upper()
     return_url = query_param("return_url", "redirect", default="")
 
+    st.warning("请保留见数问卷页面。网页实验结束后，你还需要返回见数，填写完成码并点击提交，才完成全部参与流程。")
+    st.caption("如果实验在新窗口或新标签页打开，请不要关闭原来的见数问卷。")
     st.subheader("准备开始实验")
     st.caption("基本信息和知情同意由招募问卷收集，此处无需重复填写。")
     if "generated_participant_id" not in st.session_state:
@@ -1444,16 +1446,22 @@ elif st.session_state.page == "done":
                 "invalid_query_attempts": st.session_state.get("invalid_query_attempts", ""),
             }
         )
-    st.success("实验完成，感谢你完成本次任务。")
-    st.subheader("完成码")
+    st.title("网页实验已完成，还差最后一步")
+    st.warning("请暂时不要关闭此页面。你还需要返回见数问卷，填写下面的完成码并点击提交。")
+    st.subheader("1. 复制完成码")
     st.code(st.session_state.completion_code)
-    st.caption("请复制该完成码，返回见数问卷填写并提交。研究团队将根据实验记录核验完成情况并处理报酬。")
+    st.caption("可使用完成码框右上角的复制按钮，或选中完成码复制。")
+    st.subheader("2. 返回原来的见数问卷")
+    st.write("切换到刚才保留的见数窗口或标签页；如果实验以内嵌方式打开，请回到外层见数问卷继续作答。")
+    st.subheader("3. 填写完成码并提交问卷")
+    st.write("在见数的完成码填空题中粘贴完成码，并点击问卷的提交按钮。看到见数提交成功后，再关闭实验页面。")
+    st.caption("完成码用于匹配实验与问卷记录。研究团队将根据记录核验完成情况并处理报酬。")
     return_code = st.session_state.completion_code
     final_return_url = build_return_url(st.session_state.get("return_url", ""), st.session_state.get("pid", ""), return_code)
     if final_return_url:
         if hasattr(st, "link_button"):
-            st.link_button("返回问卷平台", final_return_url)
+            st.link_button("返回见数填写完成码", final_return_url)
         else:
-            st.markdown(f"[返回问卷平台]({final_return_url})")
+            st.markdown(f"[返回见数填写完成码]({final_return_url})")
     if st.session_state.get("sheet_status") == "failed":
         st.warning("云端保存可能失败；请联系实验人员。")

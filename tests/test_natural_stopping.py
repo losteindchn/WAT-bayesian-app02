@@ -67,7 +67,7 @@ class NaturalStoppingTests(unittest.TestCase):
         self.assertIn("too_many_duplicate_queries", completion["quality_flags"])
         self.assertTrue(completion["completion_code"].startswith("INS-"))
         self.assertEqual(completion["review_code"], "")
-        self.assertIn("完成码", [x.value for x in at.subheader])
+        self.assertTrue(any("复制完成码" in x.value for x in at.subheader))
         self.assertFalse(any("人工审核" in x.value for x in at.subheader))
         self.assertFalse(any("人工审核" in x.value for x in at.warning))
 
