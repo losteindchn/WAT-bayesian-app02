@@ -29,6 +29,7 @@ def ready():
     at.secrets["min_queries"] = 3  # The old deployed secret must not reintroduce a gate.
     at.query_params.update({"group": "FH", "source": "test"})
     at.run(timeout=30)
+    next(t for t in at.text_input if t.label == "手机尾号后四位").set_value("0123")
     button(at, "开始实验").click().run(timeout=30)
     assert at.session_state["min_queries"] == 0
     materials = json.loads((ROOT / "data/materials_for_app_balanced_stage1.json").read_text())
@@ -53,6 +54,18 @@ def ready():
 class NaturalStoppingTests(unittest.TestCase):
     def assert_clean(self, at):
         self.assertFalse(at.exception, [e.message for e in at.exception])
+
+    def test_phone_tail_required_before_start(self):
+        at = AppTest.from_file(str(ROOT / "streamlit_app.py"))
+        at.secrets.clear()
+        at.query_params.update({"group": "FH", "source": "test"})
+        at.run(timeout=30)
+        button(at, "开始实验").click().run(timeout=30)
+        self.assertEqual(at.session_state["page"], "intro")
+        next(t for t in at.text_input if t.label == "手机尾号后四位").set_value("12ab")
+        button(at, "开始实验").click().run(timeout=30)
+        self.assertEqual(at.session_state["page"], "intro")
+        self.assertTrue(at.warning)
 
     def test_old_sheet_columns_remain_at_the_same_indices(self):
         import ast
@@ -152,6 +165,9 @@ class NaturalStoppingTests(unittest.TestCase):
         self.assertTrue(final["has_written_guess"])
         completion = at.session_state["responses"][-1]
         self.assertEqual(completion["stage"], "completion_valid")
+        self.assertEqual(completion["phone_tail"], "0123")
+        self.assertTrue(all(r["phone_tail"] == "0123" for r in at.session_state["responses"] if "event_time_unix" in r))
+        self.assertEqual(len(at.get("download_button")), 0)
 
     def test_unsolved_can_finish_without_a_fabricated_answer(self):
         at, _ = ready()

@@ -34,7 +34,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.13-natural-stopping"
+APP_VERSION = "human-two-stage-v2.14-phone-tail"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -210,6 +210,7 @@ SHEET_COLUMNS = [
     "query_timeout_flag",
     "answer_timeout_flag",
     "timing_source",
+    "phone_tail",
 ]
 
 
@@ -444,6 +445,7 @@ def log_event(row: Dict[str, Any]) -> None:
     row.setdefault("stage1_lookup_prefix", stage1_lookup_prefix())
     row.setdefault("full_lookup_prefix", full_lookup_prefix())
     row["session_id"] = st.session_state.get("session_id", "")
+    row.setdefault("phone_tail", st.session_state.get("phone_tail", ""))
     row.setdefault("platform_participant_id", st.session_state.get("platform_participant_id", ""))
     row.setdefault("platform_source", st.session_state.get("platform_source", ""))
     row.setdefault("condition", st.session_state.get("condition", ""))
@@ -882,6 +884,11 @@ if st.session_state.page == "intro":
         value=pid_from_url or st.session_state.generated_participant_id,
         help="如问卷或研究人员已提供编号，请使用该编号；否则保留自动生成的编号。",
     )
+    phone_tail = st.text_input(
+        "手机尾号后四位",
+        max_chars=4,
+        help="请与见数招募问卷填写的手机尾号保持一致，仅用于匹配两平台记录；无需填写完整手机号。",
+    )
     group_choice = group_from_url
     if bool_secret("show_admin_controls", False) and not group_from_url:
         group_choice = st.selectbox("实验员分组", [""] + list(GROUP_PROFILES.keys()))
@@ -920,6 +927,9 @@ if st.session_state.page == "intro":
     if st.button(start_label):
         if not pid.strip():
             st.warning("请填写或保留自动生成的受试者编号。")
+            st.stop()
+        if not re.fullmatch(r"[0-9]{4}", phone_tail.strip()):
+            st.warning("请填写手机号码最后四位数字，并与招募问卷保持一致。")
             st.stop()
         try:
             group = infer_group(pid, group_choice)
@@ -963,6 +973,7 @@ if st.session_state.page == "intro":
             order_stage1 = order[: int(stage1_n)]
             order_stage2 = order[int(stage1_n) : int(stage1_n) + int(stage2_n)]
         st.session_state.pid = pid.strip()
+        st.session_state.phone_tail = phone_tail.strip()
         st.session_state.platform_participant_id = platform_pid.strip()
         st.session_state.platform_source = platform_source.strip()
         st.session_state.condition = condition.strip()
@@ -1425,5 +1436,3 @@ elif st.session_state.page == "done":
             st.markdown(f"[返回问卷平台]({final_return_url})")
     if st.session_state.get("sheet_status") == "failed":
         st.warning("云端保存可能失败；请联系实验人员。")
-    df = pd.DataFrame(st.session_state.responses)
-    st.download_button("下载本次数据 CSV", df.to_csv(index=False), "human_experiment_events.csv", "text/csv")
