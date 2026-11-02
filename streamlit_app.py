@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
+from automatic_screening import RULE_VERSION, DEFAULT_THRESHOLDS, automatic_invalidity
 from common import GROUP_PROFILES, append_jsonl
 from feedback_resolver import load_grounding_config, load_semantic_grounding_index, resolve_query_feedback
 
@@ -34,7 +35,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.14-phone-tail"
+APP_VERSION = "human-two-stage-v2.16-unified-completion"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -211,6 +212,11 @@ SHEET_COLUMNS = [
     "answer_timeout_flag",
     "timing_source",
     "phone_tail",
+    "screening_rule_version",
+    "screening_thresholds",
+    "stage1_prior_elapsed_sec",
+    "stage1_update_elapsed_sec",
+    "stage1_trial_elapsed_sec",
 ]
 
 
@@ -446,6 +452,8 @@ def log_event(row: Dict[str, Any]) -> None:
     row.setdefault("full_lookup_prefix", full_lookup_prefix())
     row["session_id"] = st.session_state.get("session_id", "")
     row.setdefault("phone_tail", st.session_state.get("phone_tail", ""))
+    row.setdefault("screening_rule_version", RULE_VERSION)
+    row.setdefault("screening_thresholds", DEFAULT_THRESHOLDS)
     row.setdefault("platform_participant_id", st.session_state.get("platform_participant_id", ""))
     row.setdefault("platform_source", st.session_state.get("platform_source", ""))
     row.setdefault("condition", st.session_state.get("condition", ""))
@@ -468,7 +476,21 @@ def log_event(row: Dict[str, Any]) -> None:
     st.session_state.responses.append(row)
     append_jsonl(LOG_DIR / "human_events.jsonl", row)
     append_gsheet(row)
-
+    if row.get("stage") in {"stage1_passive_update", "stage1_timeout", "stage2_final_guess"}:
+        rejection_flags = automatic_invalidity(st.session_state.responses)
+        if rejection_flags and st.session_state.get("page") != "invalid":
+            st.session_state.page = "invalid"
+            st.session_state.quality_status = "invalid"
+            st.session_state.quality_pass = False
+            st.session_state.payment_eligible = False
+            st.session_state.quality_flags = ",".join(rejection_flags)
+            st.session_state.completion_code = ""
+            st.session_state.completion_code_hash = ""
+            st.session_state.review_code = ""
+            log_event({"stage": "screening_invalid", "participant_id": st.session_state.get("pid", ""),
+                       "group": st.session_state.get("group", ""), "invalid_reason": ",".join(rejection_flags),
+                       "quality_status": "invalid", "quality_pass": False, "payment_eligible": False})
+            st.rerun()
 
 
 def append_gsheet(row: Dict[str, Any]) -> None:
@@ -863,6 +885,15 @@ def evaluate_completion_quality() -> Dict[str, Any]:
 init_state()
 
 
+if st.session_state.page == "invalid":
+    st.title("本次实验已结束")
+    st.warning("你的记录已达到实验预先设置的异常作答标准，本次作答被判定为无效，不生成完成码或人工审核编号。")
+    st.caption("标准包括第一部分累计3题超时、第二部分同一题两个阶段均超时，或连续多题在明显不足的时间内提交。")
+    st.write("请返回见数平台结束本次作答。如遇页面故障或网络问题，请联系研究人员并提供以下受试者编号。")
+    st.code(st.session_state.get("pid", ""))
+    st.stop()
+
+
 if st.session_state.page == "intro":
     st.title("文字谜题联想实验")
     note("这个实验会先带你做两个练习。请按页面提示一步一步完成。")
@@ -1096,6 +1127,7 @@ elif st.session_state.page == "stage1_intro":
     card("<b>第一部分要做什么：</b>每道题先判断“起始提示词”和答案有多相关；随后看“新增提示词”和分数，再判断一次。")
     card("<b>请注意：</b>新增提示词的分数，表示新增提示词和答案有多接近；它不是起始提示词的分数。")
     warning_note("所有滑块都需要根据你的判断拖动。请不要一直使用默认的 50。")
+    st.caption("异常作答将自动结束：第一部分累计3题超时（每页120秒），或连续5题每题两页合计不足5秒；第二部分同一题查询超过8分钟且回答评价超过4分钟，或连续3题每题全过程不足10秒。其余异常保留人工审核。")
     if st.button("开始第一部分正式实验"):
         reset_formal_quality_state()
         st.session_state.page = "stage1"
@@ -1147,6 +1179,7 @@ elif st.session_state.page == "stage1":
                 reset_screen_timer()
                 st.warning("本轮已超时，系统已记录为无效并进入下一题。")
                 st.rerun()
+            st.session_state.temp_prior_elapsed_sec = elapsed_screen_sec()
             st.session_state.temp_prior = prior
             st.session_state.stage1_phase = "update"
             reset_screen_timer()
@@ -1178,6 +1211,11 @@ elif st.session_state.page == "stage1":
                     "timeout_flag": timeout,
                     "invalid_reason": "stage1_update_timeout" if timeout else "",
                 }
+            event["stage1_prior_elapsed_sec"] = st.session_state.get("temp_prior_elapsed_sec", "")
+            event["stage1_update_elapsed_sec"] = elapsed_screen_sec()
+            prior_elapsed = event["stage1_prior_elapsed_sec"]
+            event["stage1_trial_elapsed_sec"] = (prior_elapsed + event["stage1_update_elapsed_sec"]
+                                                 if isinstance(prior_elapsed, (int, float)) else "")
             add_researcher_fields(event, item, fb)
             log_event(event)
             st.session_state.stage1_idx += 1
@@ -1372,18 +1410,11 @@ elif st.session_state.page == "done":
         ]:
             st.session_state[key] = quality[key]
 
-        if quality["quality_pass"]:
-            code = completion_code(st.session_state.get("pid", ""), st.session_state.get("session_id", ""), st.session_state.get("group", ""))
-            st.session_state.completion_code = code
-            st.session_state.completion_code_hash = completion_hash(code)
-            st.session_state.review_code = ""
-            stage_name = "completion_valid"
-        else:
-            code = review_code(st.session_state.get("pid", ""), st.session_state.get("session_id", ""), st.session_state.get("group", ""))
-            st.session_state.completion_code = ""
-            st.session_state.completion_code_hash = ""
-            st.session_state.review_code = code
-            stage_name = "completion_review"
+        code = completion_code(st.session_state.get("pid", ""), st.session_state.get("session_id", ""), st.session_state.get("group", ""))
+        st.session_state.completion_code = code
+        st.session_state.completion_code_hash = completion_hash(code)
+        st.session_state.review_code = ""
+        stage_name = "completion_valid" if quality["quality_pass"] else "completion_review"
 
         log_event(
             {
@@ -1414,20 +1445,10 @@ elif st.session_state.page == "done":
             }
         )
     st.success("实验完成，感谢你完成本次任务。")
-    if st.session_state.get("quality_pass"):
-        st.subheader("完成码")
-        st.code(st.session_state.completion_code)
-        st.caption("请返回问卷平台填写该完成码，以便核验完成状态和发放报酬。")
-        return_code = st.session_state.completion_code
-    else:
-        st.warning("你的实验记录需要人工审核。当前不会生成正式完成码。")
-        st.subheader("人工审核编号")
-        st.code(st.session_state.review_code)
-        st.caption("请返回问卷平台填写该人工审核编号。研究者会根据完整记录决定是否采纳和发放报酬。")
-        with st.expander("为什么需要人工审核？"):
-            flags = st.session_state.get("quality_flags", "")
-            st.write(flags or "系统质量检查发现需要人工确认。")
-        return_code = st.session_state.review_code
+    st.subheader("完成码")
+    st.code(st.session_state.completion_code)
+    st.caption("请复制该完成码，返回见数问卷填写并提交。研究团队将根据实验记录核验完成情况并处理报酬。")
+    return_code = st.session_state.completion_code
     final_return_url = build_return_url(st.session_state.get("return_url", ""), st.session_state.get("pid", ""), return_code)
     if final_return_url:
         if hasattr(st, "link_button"):

@@ -55,6 +55,41 @@ class NaturalStoppingTests(unittest.TestCase):
     def assert_clean(self, at):
         self.assertFalse(at.exception, [e.message for e in at.exception])
 
+    def test_review_uses_same_participant_facing_completion_code(self):
+        at, _ = ready()
+        at.session_state["duplicate_query_attempts"] = 7
+        button(at, "暂时无法解答").click().run(timeout=30)
+        button(at, "提交并进入下一题").click().run(timeout=30)
+        self.assert_clean(at)
+        completion = at.session_state["responses"][-1]
+        self.assertEqual(completion["stage"], "completion_review")
+        self.assertEqual(completion["quality_status"], "review")
+        self.assertIn("too_many_duplicate_queries", completion["quality_flags"])
+        self.assertTrue(completion["completion_code"].startswith("INS-"))
+        self.assertEqual(completion["review_code"], "")
+        self.assertIn("完成码", [x.value for x in at.subheader])
+        self.assertFalse(any("人工审核" in x.value for x in at.subheader))
+        self.assertFalse(any("人工审核" in x.value for x in at.warning))
+
+    def test_stage1_rapid_trials_terminate_before_completion(self):
+        at, _ = ready()
+        at.session_state["page"] = "stage1"
+        at.session_state["stage1_idx"] = 0
+        at.session_state["stage1_phase"] = "prior"
+        at.session_state["order_stage1"] = at.session_state["order_stage1"][:6]
+        at.run(timeout=30)
+        for i in range(5):
+            at.session_state["screen_started_at"] = time.time() - 0.5
+            button(at, "下一步：查看新增提示词").click().run(timeout=30)
+            at.session_state["screen_started_at"] = time.time() - 0.5
+            button(at, "提交，进入下一题").click().run(timeout=30)
+            self.assert_clean(at)
+            self.assertEqual(at.session_state["page"], "invalid" if i == 4 else "stage1")
+        self.assertEqual(at.session_state["responses"][-1]["stage"], "screening_invalid")
+        self.assertEqual(at.session_state["completion_code"], "")
+        self.assertEqual(at.session_state["review_code"], "")
+        self.assertFalse(any(r.get("stage", "").startswith("completion_") for r in at.session_state["responses"]))
+
     def test_phone_tail_required_before_start(self):
         at = AppTest.from_file(str(ROOT / "streamlit_app.py"))
         at.secrets.clear()
@@ -227,8 +262,11 @@ class NaturalStoppingTests(unittest.TestCase):
         self.assert_clean(at)
         final = next(r for r in at.session_state["responses"] if r.get("stage") == "stage2_final_guess")
         self.assertTrue(final["query_timeout_flag"] and final["answer_timeout_flag"])
-        self.assertEqual(at.session_state["responses"][-1]["stage2_timeout_count"], 1)
-        self.assertEqual(at.session_state["responses"][-1]["stage"], "completion_review")
+        self.assertEqual(at.session_state["responses"][-1]["stage"], "screening_invalid")
+        self.assertEqual(at.session_state["quality_status"], "invalid")
+        self.assertEqual(at.session_state["completion_code"], "")
+        self.assertEqual(at.session_state["review_code"], "")
+        self.assertEqual(at.session_state["page"], "invalid")
 
     def test_next_trial_has_new_clock_and_id(self):
         at, item = ready()
