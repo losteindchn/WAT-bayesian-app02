@@ -19,6 +19,7 @@ import pandas as pd
 import streamlit as st
 
 from automatic_screening import RULE_VERSION, DEFAULT_THRESHOLDS, automatic_invalidity
+from aha_location import AHA_LOCATION_VERSION, aha_location_options
 from common import GROUP_PROFILES, append_jsonl
 from feedback_resolver import load_grounding_config, load_semantic_grounding_index, resolve_query_feedback
 
@@ -35,7 +36,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.17-return-reminders"
+APP_VERSION = "human-two-stage-v2.18-aha-location"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -217,6 +218,10 @@ SHEET_COLUMNS = [
     "stage1_prior_elapsed_sec",
     "stage1_update_elapsed_sec",
     "stage1_trial_elapsed_sec",
+    "aha_location",
+    "aha_query_index",
+    "aha_location_label",
+    "aha_location_measure_version",
 ]
 
 
@@ -1359,6 +1364,14 @@ elif st.session_state.page == "stage2":
         aha = rating_slider("你是否有突然明白的感觉", f"aha_{item_id}")
         aha_suddenness = rating_slider("这个想法出现得有多突然", f"aha_sudden_{item_id}")
         aha_surprise = rating_slider("这个答案或想法让你有多惊讶", f"aha_surprise_{item_id}")
+        location_options = aha_location_options(len(history))
+        aha_location = st.radio(
+            '如果本题出现过“突然明白”的感觉，你第一次出现这种感觉是在什么时候？',
+            options=list(location_options), index=None,
+            format_func=lambda code: location_options[code]["label"],
+            key=f"aha_location_{item_id}",
+        )
+        st.caption("请选择最接近的一步；没有这种感觉也完全正常。")
         confidence = rating_slider("你对当前答案或想法有多确定？", f"final_conf_{item_id}")
         known_story = st.radio("你以前是否看过这个谜题或知道答案？", ["否", "不确定", "是"], horizontal=True, key=f"known_{item_id}")
         if st.button("提交并进入下一题", key=f"finish_{item_id}"):
@@ -1366,6 +1379,10 @@ elif st.session_state.page == "stage2":
             if self_report == status_options[0] and not guess.strip():
                 st.warning("请填写你形成的解释；如果尚未形成解释，请选择第二项。")
                 st.stop()
+            if aha_location is None:
+                st.warning("请选择首次突然明白的位置；也可以选择记不清或本题没有出现这种感觉。")
+                st.stop()
+            location = location_options[aha_location]
             answer_timeout = bool(answer_limit > 0 and submitted_at - trial["answer_started_at"] > answer_limit)
             query_timeout = trial["stop_reason"] == "query_timeout"
             reasons = [name for condition, name in [(query_timeout, "stage2_query_timeout"),
@@ -1375,6 +1392,8 @@ elif st.session_state.page == "stage2":
                      "title": item.get("title", ""), "event_time_unix": submitted_at,
                      "guess": guess.strip(), "has_written_guess": bool(guess.strip()),
                      "self_report_status": "explanation_formed" if self_report == status_options[0] else "not_solved",
+                     "aha_location": location["category"], "aha_query_index": location["query_index"],
+                     "aha_location_label": location["label"], "aha_location_measure_version": AHA_LOCATION_VERSION,
                      "aha": aha / 100, "aha_suddenness": aha_suddenness / 100,
                      "aha_surprise": aha_surprise / 100, "confidence": confidence / 100,
                      "known_story": known_story, "n_queries": len(history), "query_history": list(history),

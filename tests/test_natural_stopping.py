@@ -17,6 +17,11 @@ common.append_jsonl = lambda path, row: _original_append_jsonl(Path(_TEST_LOGS.n
 
 
 def button(at, prefix):
+    # Existing scenarios explicitly answer the newly required retrospective item.
+    if prefix == "提交并进入下一题":
+        for radio in at.radio:
+            if radio.label.startswith('如果本题出现过') and radio.value is None:
+                radio.set_value("none")
     return next(b for b in at.button if b.label.startswith(prefix))
 
 
