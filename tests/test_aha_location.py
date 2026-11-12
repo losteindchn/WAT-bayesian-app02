@@ -2,7 +2,7 @@
 import json
 import unittest
 from test_natural_stopping import ready, button, ROOT
-from aha_location import aha_location_options, AHA_LOCATION_VERSION
+from aha_location import aha_location_options, AHA_LOCATION_VERSION, aha_consistency_flags
 
 
 class AhaLocationTests(unittest.TestCase):
@@ -58,6 +58,36 @@ class AhaLocationTests(unittest.TestCase):
                 self.assertEqual(self.final(at)["aha_location"], code)
                 self.assertIsNone(self.final(at)["aha_query_index"])
                 self.assertEqual(at.session_state["responses"][-1]["stage"], "completion_valid")
+
+    def test_consistency_threshold_and_missing_or_other_measures(self):
+        for score in (0, 50, 79, None, "80"):
+            self.assertEqual(aha_consistency_flags("none", score), [])
+        for score in (80, 100):
+            self.assertEqual(aha_consistency_flags("none", score), ["no_aha_location_with_high_aha_strength"])
+        for category in ("unknown", "before_search", "after_feedback", "answer_phase", None):
+            self.assertEqual(aha_consistency_flags(category, 100), [])
+
+    def test_flagged_trial_keeps_normal_completion_and_payment_status(self):
+        at, _ = ready()
+        button(at, "暂时无法解答").click().run()
+        self.radio(at).set_value("none")
+        next(s for s in at.slider if s.label.startswith("你是否有突然明白的感觉")).set_value(80)
+        button(at, "提交并进入下一题").click().run()
+        self.assertFalse(at.exception)
+        final = self.final(at)
+        self.assertTrue(final["aha_consistency_review_needed"])
+        self.assertEqual(final["aha_consistency_high_threshold"], 80)
+        self.assertEqual(final["aha"], .8)
+        completion = at.session_state["responses"][-1]
+        self.assertEqual(completion["stage"], "completion_valid")
+        self.assertTrue(completion["completion_code"].startswith("INS-"))
+        self.assertTrue(completion["quality_pass"])
+        self.assertTrue(completion["payment_eligible"])
+        self.assertEqual(completion["quality_flags"], "")
+        summary = json.loads(completion["quality_summary"])
+        self.assertEqual(summary["aha_consistency_flagged_trial_count"], 1)
+        self.assertEqual(summary["aha_consistency_flagged_trials"][0]["trial_id"], final["trial_id"])
+        self.assertFalse(any(r.get("stage") == "screening_invalid" for r in at.session_state["responses"]))
 
     def test_all_eight_queries_available_without_invented_timestamp(self):
         options = aha_location_options(8)

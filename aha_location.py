@@ -16,3 +16,16 @@ def aha_location_options(n_queries):
                         ("none", "本题没有出现这种感觉")]:
         options[code] = {"label": label, "category": code, "query_index": None}
     return options
+
+
+AHA_CONSISTENCY_VERSION = "aha-consistency-v1-20261111"
+AHA_ABSENT_HIGH_THRESHOLD = 80
+
+
+def aha_consistency_flags(location_category, aha_strength):
+    """Review signal only; strength is the participant-facing 0-100 score."""
+    if (location_category == "none" and isinstance(aha_strength, (int, float))
+            and not isinstance(aha_strength, bool)
+            and AHA_ABSENT_HIGH_THRESHOLD <= aha_strength <= 100):
+        return ["no_aha_location_with_high_aha_strength"]
+    return []

@@ -19,7 +19,8 @@ import pandas as pd
 import streamlit as st
 
 from automatic_screening import RULE_VERSION, DEFAULT_THRESHOLDS, automatic_invalidity
-from aha_location import AHA_LOCATION_VERSION, aha_location_options
+from aha_location import (AHA_LOCATION_VERSION, aha_location_options, aha_consistency_flags,
+                          AHA_CONSISTENCY_VERSION, AHA_ABSENT_HIGH_THRESHOLD)
 from common import GROUP_PROFILES, append_jsonl
 from feedback_resolver import load_grounding_config, load_semantic_grounding_index, resolve_query_feedback
 
@@ -36,7 +37,7 @@ DATA_DIR = APP_DIR / "data"
 LOG_DIR = APP_DIR / "logs"
 
 
-APP_VERSION = "human-two-stage-v2.18-aha-location"
+APP_VERSION = "human-two-stage-v2.19-aha-review-flags"
 
 
 DEFAULT_STAGE1_ITEM_IDS_20 = [
@@ -222,6 +223,10 @@ SHEET_COLUMNS = [
     "aha_query_index",
     "aha_location_label",
     "aha_location_measure_version",
+    "aha_consistency_flags",
+    "aha_consistency_review_needed",
+    "aha_consistency_rule_version",
+    "aha_consistency_high_threshold",
 ]
 
 
@@ -874,6 +879,15 @@ def evaluate_completion_quality() -> Dict[str, Any]:
             "expected_stage1": expected_stage1,
             "expected_stage2": expected_stage2,
             "known_story_yes_count": len(known_story_yes),
+            # Measurement review is separate from validity and payment status.
+            "aha_consistency_flagged_trial_count": sum(bool(r.get("aha_consistency_flags")) for r in stage2_finals),
+            "aha_consistency_flagged_trials": [
+                {"trial_id": r.get("trial_id"), "item_id": r.get("item_id"),
+                 "flags": r.get("aha_consistency_flags")}
+                for r in stage2_finals if r.get("aha_consistency_flags")
+            ],
+            "aha_consistency_rule_version": AHA_CONSISTENCY_VERSION,
+            "aha_consistency_high_threshold": AHA_ABSENT_HIGH_THRESHOLD,
             "thresholds": thresholds,
         }
     )
@@ -1383,6 +1397,7 @@ elif st.session_state.page == "stage2":
                 st.warning("请选择首次突然明白的位置；也可以选择记不清或本题没有出现这种感觉。")
                 st.stop()
             location = location_options[aha_location]
+            consistency_flags = aha_consistency_flags(location["category"], aha)
             answer_timeout = bool(answer_limit > 0 and submitted_at - trial["answer_started_at"] > answer_limit)
             query_timeout = trial["stop_reason"] == "query_timeout"
             reasons = [name for condition, name in [(query_timeout, "stage2_query_timeout"),
@@ -1394,6 +1409,10 @@ elif st.session_state.page == "stage2":
                      "self_report_status": "explanation_formed" if self_report == status_options[0] else "not_solved",
                      "aha_location": location["category"], "aha_query_index": location["query_index"],
                      "aha_location_label": location["label"], "aha_location_measure_version": AHA_LOCATION_VERSION,
+                     "aha_consistency_flags": consistency_flags,
+                     "aha_consistency_review_needed": bool(consistency_flags),
+                     "aha_consistency_rule_version": AHA_CONSISTENCY_VERSION,
+                     "aha_consistency_high_threshold": AHA_ABSENT_HIGH_THRESHOLD,
                      "aha": aha / 100, "aha_suddenness": aha_suddenness / 100,
                      "aha_surprise": aha_surprise / 100, "confidence": confidence / 100,
                      "known_story": known_story, "n_queries": len(history), "query_history": list(history),
